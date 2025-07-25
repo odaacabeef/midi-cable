@@ -77,9 +77,27 @@ func (mf *MIDIForwarder) Start(ctx context.Context) error {
 
 	// Set up message handler using Listen
 	stopFn, err := mf.input.Listen(func(msg []byte, timestampms int32) {
-		// Forward the message to output
-		if err := mf.output.Send(msg); err != nil {
-			log.Printf("Error forwarding message: %v", err)
+		// Validate and forward the message
+		if len(msg) > 0 {
+			// Log the message for debugging
+			log.Printf("Received MIDI message: %v (length: %d)", msg, len(msg))
+
+			// Handle program change messages that might be 3 bytes
+			if len(msg) >= 2 && (msg[0]&0xF0) == 0xC0 {
+				// Program Change message - take only first 2 bytes
+				programMsg := msg[:2]
+				log.Printf("Program Change detected, using first 2 bytes: %v", programMsg)
+				if err := mf.output.Send(programMsg); err != nil {
+					log.Printf("Error forwarding program change: %v", err)
+				}
+			} else if isValidMIDIMessage(msg) {
+				// Forward other valid messages as-is
+				if err := mf.output.Send(msg); err != nil {
+					log.Printf("Error forwarding message: %v", err)
+				}
+			} else {
+				log.Printf("Invalid MIDI message length, skipping: %v", msg)
+			}
 		}
 	}, drivers.ListenConfig{})
 	if err != nil {
@@ -91,6 +109,40 @@ func (mf *MIDIForwarder) Start(ctx context.Context) error {
 	<-ctx.Done()
 	log.Println("Stopping MIDI forwarding...")
 	return nil
+}
+
+// isValidMIDIMessage validates the length of a MIDI message based on its type
+func isValidMIDIMessage(msg []byte) bool {
+	if len(msg) == 0 {
+		return false
+	}
+
+	status := msg[0] & 0xF0 // Get the message type (high nibble)
+
+	switch status {
+	case 0x80, 0x90, 0xA0, 0xB0, 0xE0: // Note Off, Note On, Poly Pressure, Control Change, Pitch Bend
+		return len(msg) == 3
+	case 0xC0, 0xD0: // Program Change, Channel Pressure
+		return len(msg) == 2
+	case 0xF0: // System messages
+		if len(msg) < 2 {
+			return false
+		}
+		switch msg[1] {
+		case 0xF0: // SysEx start
+			return true // Variable length, but we'll accept it
+		case 0xF1, 0xF3: // MIDI Time Code, Song Select
+			return len(msg) == 2
+		case 0xF2: // Song Position Pointer
+			return len(msg) == 3
+		case 0xF6, 0xF7, 0xF8, 0xFA, 0xFB, 0xFC: // Tune Request, Clock, Start, Continue, Stop, Active Sensing, Reset
+			return len(msg) == 1
+		default:
+			return false
+		}
+	default:
+		return false
+	}
 }
 
 func listPorts() {
