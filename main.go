@@ -80,8 +80,6 @@ func (mf *MIDIForwarder) Start(ctx context.Context) error {
 		// Forward the message to output
 		if err := mf.output.Send(msg); err != nil {
 			log.Printf("Error forwarding message: %v", err)
-		} else {
-			log.Printf("Forwarded: %v", msg)
 		}
 	}, drivers.ListenConfig{})
 	if err != nil {
