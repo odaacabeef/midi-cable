@@ -9,7 +9,7 @@ Forwards MIDI output messages from one device to the input of another device.
 To see all available MIDI input and output devices:
 
 ```bash
-midi-cable --list
+mc --list
 ```
 
 ### Forward MIDI Messages
@@ -17,5 +17,5 @@ midi-cable --list
 To forward MIDI messages from one device to another:
 
 ```bash
-midi-cable "Input Device Name" "Output Device Name"
+mc "Input Device Name" "Output Device Name"
 ```

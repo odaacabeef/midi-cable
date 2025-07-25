@@ -118,12 +118,12 @@ func listPorts() {
 func main() {
 	// Check command line arguments
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: midi-cable <input-port-name> <output-port-name>")
-		fmt.Println("   or: midi-cable --list")
+		fmt.Println("Usage: mc <input-port-name> <output-port-name>")
+		fmt.Println("   or: mc --list")
 		fmt.Println()
 		fmt.Println("Examples:")
-		fmt.Println("  midi-cable \"MIDI Device 1\" \"MIDI Device 2\"")
-		fmt.Println("  midi-cable --list")
+		fmt.Println("  mc \"MIDI Device 1\" \"MIDI Device 2\"")
+		fmt.Println("  mc --list")
 		os.Exit(1)
 	}
 
@@ -136,7 +136,7 @@ func main() {
 	// Check if we have both input and output names
 	if len(os.Args) < 3 {
 		fmt.Println("Error: Both input and output port names are required")
-		fmt.Println("Usage: midi-cable <input-port-name> <output-port-name>")
+		fmt.Println("Usage: mc <input-port-name> <output-port-name>")
 		os.Exit(1)
 	}
 
