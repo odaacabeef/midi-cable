@@ -1,6 +1,6 @@
 # MIDI Cable
 
-Forwards MIDI output messages from one device to the input of another device.
+CLI for managing the flow of MIDI messages among devices.
 
 ## Usage
 
@@ -9,7 +9,7 @@ Forwards MIDI output messages from one device to the input of another device.
 To see all available MIDI input and output devices:
 
 ```bash
-mc --list
+mc list
 ```
 
 ### Forward MIDI Messages
@@ -17,5 +17,5 @@ mc --list
 To forward MIDI messages from one device to another:
 
 ```bash
-mc "Input Device Name" "Output Device Name"
+mc fwd "Input Device Name" "Output Device Name"
 ```
