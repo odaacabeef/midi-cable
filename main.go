@@ -12,30 +12,43 @@ import (
 func main() {
 	// Check command line arguments
 	if len(os.Args) < 2 {
-		fmt.Println("Usage: mc <input-port-name> <output-port-name>")
-		fmt.Println("   or: mc --list")
+		fmt.Println("Usage: mc <command> [arguments]")
+		fmt.Println()
+		fmt.Println("Commands:")
+		fmt.Println("  fwd <input-port-name> <output-port-name>  Forward MIDI from input to output")
+		fmt.Println("  list                                      List available MIDI ports")
 		fmt.Println()
 		fmt.Println("Examples:")
-		fmt.Println("  mc \"MIDI Device 1\" \"MIDI Device 2\"")
-		fmt.Println("  mc --list")
+		fmt.Println("  mc fwd \"MIDI Device 1\" \"MIDI Device 2\"")
+		fmt.Println("  mc list")
 		os.Exit(1)
 	}
 
-	// Handle --list flag
-	if os.Args[1] == "--list" {
+	command := os.Args[1]
+
+	switch command {
+	case "fwd":
+		handleForwardCommand()
+	case "list":
 		listPorts()
-		return
+	default:
+		fmt.Printf("Unknown command: %s\n", command)
+		fmt.Println("Usage: mc <command> [arguments]")
+		fmt.Println("Commands: fwd, list")
+		os.Exit(1)
 	}
+}
 
+func handleForwardCommand() {
 	// Check if we have both input and output names
-	if len(os.Args) < 3 {
+	if len(os.Args) < 4 {
 		fmt.Println("Error: Both input and output port names are required")
-		fmt.Println("Usage: mc <input-port-name> <output-port-name>")
+		fmt.Println("Usage: mc fwd <input-port-name> <output-port-name>")
 		os.Exit(1)
 	}
 
-	inputName := os.Args[1]
-	outputName := os.Args[2]
+	inputName := os.Args[2]
+	outputName := os.Args[3]
 
 	// Create MIDI forwarder
 	forwarder, err := NewMIDIForwarder(inputName, outputName)
