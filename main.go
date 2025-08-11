@@ -51,7 +51,7 @@ func handleForwardCommand() {
 	outputName := os.Args[3]
 
 	// Create MIDI forwarder
-	forwarder, err := NewMIDIForwarder(inputName, outputName)
+	forwarder, err := NewForwarder(inputName, outputName)
 	if err != nil {
 		log.Fatalf("Failed to create MIDI forwarder: %v", err)
 	}

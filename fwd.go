@@ -9,12 +9,12 @@ import (
 	_ "gitlab.com/gomidi/midi/v2/drivers/rtmididrv"
 )
 
-type MIDIForwarder struct {
+type Forwarder struct {
 	input  drivers.In
 	output drivers.Out
 }
 
-func NewMIDIForwarder(inputName, outputName string) (*MIDIForwarder, error) {
+func NewForwarder(inputName, outputName string) (*Forwarder, error) {
 	// Get available ports
 	ins, err := drivers.Ins()
 	if err != nil {
@@ -50,13 +50,13 @@ func NewMIDIForwarder(inputName, outputName string) (*MIDIForwarder, error) {
 		return nil, fmt.Errorf("output port '%s' not found", outputName)
 	}
 
-	return &MIDIForwarder{
+	return &Forwarder{
 		input:  input,
 		output: output,
 	}, nil
 }
 
-func (mf *MIDIForwarder) Start(ctx context.Context) error {
+func (mf *Forwarder) Start(ctx context.Context) error {
 	// Open input port
 	if err := mf.input.Open(); err != nil {
 		return fmt.Errorf("failed to open input port: %w", err)
