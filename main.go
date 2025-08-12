@@ -15,22 +15,26 @@ func main() {
 		fmt.Println("Usage: mc <command> [arguments]")
 		fmt.Println()
 		fmt.Println("Commands:")
-		fmt.Println("  fwd <input-port-name> <output-port-name>  Forward MIDI from input to output")
-		fmt.Println("  list                                      List available MIDI ports")
+		fmt.Println("  list                            List available MIDI ports")
+		fmt.Println("  fwd <input-name> <output-name>  Forward MIDI from input to output")
+		fmt.Println("  port <name>                     Open virtual port")
 		fmt.Println()
 		fmt.Println("Examples:")
-		fmt.Println("  mc fwd \"MIDI Device 1\" \"MIDI Device 2\"")
 		fmt.Println("  mc list")
+		fmt.Println("  mc fwd \"MIDI Device 1\" \"MIDI Device 2\"")
+		fmt.Println("  mc port mc-port")
 		os.Exit(1)
 	}
 
 	command := os.Args[1]
 
 	switch command {
-	case "fwd":
-		handleForwardCommand()
 	case "list":
 		listPorts()
+	case "fwd":
+		handleForwardCommand()
+	case "port":
+
 	default:
 		fmt.Printf("Unknown command: %s\n", command)
 		fmt.Println("Usage: mc <command> [arguments]")
