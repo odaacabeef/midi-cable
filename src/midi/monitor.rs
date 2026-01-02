@@ -11,8 +11,6 @@ pub mod macos {
 
     /// Start monitoring by spawning subprocesses to get fresh device enumeration
     pub fn start_monitor(event_tx: Sender<AppEvent>) -> Result<(), Box<dyn std::error::Error>> {
-        use crate::connection::PortId;
-
         thread::spawn(move || {
             let mut previous_devices = String::new();
 
@@ -104,8 +102,6 @@ pub mod other {
     /// Start monitoring by spawning subprocesses to get fresh device enumeration
     /// Same approach as macOS - works on all platforms
     pub fn start_monitor(event_tx: Sender<AppEvent>) -> Result<(), Box<dyn std::error::Error>> {
-        use crate::connection::PortId;
-
         thread::spawn(move || {
             let mut previous_devices = String::new();
 

@@ -31,16 +31,10 @@ impl MidiManager {
         match VirtualPorts::create() {
             Ok(ports) => {
                 self.virtual_ports = Some(ports);
-                let _ = self.event_tx.send(AppEvent::Log(format!(
-                    "Created virtual ports: {} and {}",
-                    VIRTUAL_INPUT_NAME, VIRTUAL_OUTPUT_NAME
-                )));
                 Ok(())
             }
             Err(e) => {
-                let _ = self
-                    .event_tx
-                    .send(AppEvent::Error(format!("Failed to create virtual ports: {}", e)));
+                eprintln!("Failed to create virtual ports: {}", e);
                 Err(e.into())
             }
         }
@@ -113,10 +107,7 @@ impl MidiManager {
 
         self.forwarders.insert(connection.clone(), handle);
 
-        let _ = self.event_tx.send(AppEvent::ConnectionStatus {
-            connection,
-            status: "Active".to_string(),
-        });
+        let _ = self.event_tx.send(AppEvent::ConnectionStatus);
 
         Ok(())
     }
@@ -125,10 +116,6 @@ impl MidiManager {
     pub fn stop_connection(&mut self, connection: &Connection) {
         if let Some(_handle) = self.forwarders.remove(connection) {
             // The forwarder will be dropped, closing the MIDI connections
-            let _ = self.event_tx.send(AppEvent::Log(format!(
-                "Stopped connection: {}",
-                connection
-            )));
         }
     }
 
@@ -138,11 +125,6 @@ impl MidiManager {
             .keys()
             .map(|conn| (conn.clone(), ConnectionStatus::Active))
             .collect()
-    }
-
-    /// Checks if a connection exists
-    pub fn has_connection(&self, connection: &Connection) -> bool {
-        self.forwarders.contains_key(connection)
     }
 
     /// Enable virtual port forwarding (mc-virtual-in -> mc-virtual-out)

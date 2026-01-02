@@ -8,8 +8,8 @@ use std::thread::{self, JoinHandle};
 
 /// Handle for a running forwarder thread
 pub struct ForwarderHandle {
-    pub connection: Connection,
-    pub join_handle: JoinHandle<()>,
+    _connection: Connection,
+    _join_handle: JoinHandle<()>,
     _midi_connection: MidiInputConnection<()>,
 }
 
@@ -65,11 +65,7 @@ pub fn start_forwarder(
         (),
     ).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to connect input: {:?}", e))) as Box<dyn std::error::Error>)?;
 
-    // Log successful connection
-    let _ = event_tx.send(AppEvent::Log(format!(
-        "Started forwarding: {}",
-        connection
-    )));
+    // Successfully started forwarding
 
     // The join handle is just a placeholder - actual work happens in the MIDI callback
     // The thread just waits for the connection to be dropped
@@ -80,8 +76,8 @@ pub fn start_forwarder(
     });
 
     Ok(ForwarderHandle {
-        connection,
-        join_handle,
+        _connection: connection,
+        _join_handle: join_handle,
         _midi_connection: in_conn,
     })
 }
@@ -90,7 +86,7 @@ pub fn start_forwarder(
 fn handle_midi_message(
     message: &[u8],
     output: &Arc<Mutex<MidiOutputConnection>>,
-    event_tx: &Sender<AppEvent>,
+    _event_tx: &Sender<AppEvent>,
     connection: &Connection,
 ) {
     if message.is_empty() {
@@ -102,10 +98,7 @@ fn handle_midi_message(
         let normalized = normalize_program_change(message);
         if let Ok(mut out) = output.lock() {
             if let Err(e) = out.send(&normalized) {
-                let _ = event_tx.send(AppEvent::Error(format!(
-                    "Error forwarding program change on {}: {}",
-                    connection, e
-                )));
+                eprintln!("Error forwarding program change on {}: {}", connection, e);
             }
         }
         return;
@@ -115,16 +108,9 @@ fn handle_midi_message(
     if is_valid_midi_message(message) {
         if let Ok(mut out) = output.lock() {
             if let Err(e) = out.send(message) {
-                let _ = event_tx.send(AppEvent::Error(format!(
-                    "Error forwarding message on {}: {}",
-                    connection, e
-                )));
+                eprintln!("Error forwarding message on {}: {}", connection, e);
             }
         }
-    } else {
-        let _ = event_tx.send(AppEvent::Log(format!(
-            "Invalid MIDI message length on {}, skipping: {:?}",
-            connection, message
-        )));
     }
+    // Invalid messages are silently skipped
 }

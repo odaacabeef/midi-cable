@@ -1,7 +1,6 @@
 use crate::app::{App, UiState};
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Paragraph},
     Frame,

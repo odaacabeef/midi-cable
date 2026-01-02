@@ -42,14 +42,12 @@ impl fmt::Display for Connection {
 #[derive(Debug, Clone)]
 pub enum ConnectionStatus {
     Active,
-    Error(String),
 }
 
 impl fmt::Display for ConnectionStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ConnectionStatus::Active => write!(f, "OK"),
-            ConnectionStatus::Error(err) => write!(f, "ERR: {}", err),
         }
     }
 }

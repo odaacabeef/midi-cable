@@ -25,7 +25,7 @@ pub struct App {
     pub should_quit: bool,
 
     midi_manager: MidiManager,
-    event_tx: Sender<AppEvent>,
+    _event_tx: Sender<AppEvent>,
     event_rx: Receiver<AppEvent>,
     show_virtual_connection: bool,
     virtual_connection: Option<Connection>,
@@ -43,7 +43,7 @@ impl App {
             ui_state: UiState::Idle { cursor_idx: 0 },
             should_quit: false,
             midi_manager,
-            event_tx,
+            _event_tx: event_tx,
             event_rx,
             show_virtual_connection: false,
             virtual_connection: None,
@@ -96,11 +96,8 @@ impl App {
     pub fn process_events(&mut self) {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
-                AppEvent::ConnectionStatus { .. } => {
+                AppEvent::ConnectionStatus => {
                     self.update_connection_list();
-                }
-                AppEvent::PortsChanged => {
-                    self.handle_ports_changed();
                 }
                 AppEvent::PortListUpdate { inputs, outputs } => {
                     // Directly update port lists from subprocess enumeration
@@ -109,7 +106,6 @@ impl App {
                     // Clean up stale connections
                     self.cleanup_stale_connections();
                 }
-                _ => {}
             }
         }
     }
@@ -200,13 +196,6 @@ impl App {
             .filter(|(conn, _)| &conn.input == input)
             .map(|(conn, _)| conn.output.clone())
             .collect()
-    }
-
-    /// Check if an output is connected to a specific input
-    pub fn is_output_connected(&self, input: &PortId, output: &PortId) -> bool {
-        self.active_connections
-            .iter()
-            .any(|(conn, _)| &conn.input == input && &conn.output == output)
     }
 
     // Keyboard input handlers
