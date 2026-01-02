@@ -1,22 +1,24 @@
 use anyhow::Result;
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex};
 
 pub const VIRTUAL_INPUT_NAME: &str = "mc-virtual-in";
 pub const VIRTUAL_OUTPUT_NAME: &str = "mc-virtual-out";
 
-/// Manages virtual MIDI ports with automatic forwarding from input to output
+/// Manages virtual MIDI ports with controllable forwarding from input to output
 /// These connections must be kept alive for the virtual ports to remain available in the system
 pub struct VirtualPorts {
     // Keep the connections alive - dropping them will destroy the virtual ports
     _input_connection: MidiInputConnection<()>,
     _output_connection: Arc<Mutex<MidiOutputConnection>>,
+    // Control whether messages are forwarded
+    forwarding_enabled: Arc<AtomicBool>,
 }
 
 impl VirtualPorts {
     /// Creates virtual MIDI input and output ports
     /// The ports will appear in the system as long as this struct is alive
-    /// Messages sent to mc-virtual-in are automatically forwarded to mc-virtual-out
+    /// Messages sent to mc-virtual-in are forwarded to mc-virtual-out when enabled (default: enabled)
     #[cfg(unix)]
     pub fn create() -> Result<Self> {
         use midir::os::unix::{VirtualInput, VirtualOutput};
@@ -36,6 +38,10 @@ impl VirtualPorts {
         let output_shared = Arc::new(Mutex::new(output_connection));
         let output_for_callback = Arc::clone(&output_shared);
 
+        // Create the forwarding control flag (enabled by default)
+        let forwarding_enabled = Arc::new(AtomicBool::new(true));
+        let forwarding_flag = Arc::clone(&forwarding_enabled);
+
         // Create virtual input port with forwarding callback
         // This port will appear as "mc-virtual-in" in the system
         // Other applications can send MIDI to this port
@@ -43,10 +49,12 @@ impl VirtualPorts {
             .create_virtual(
                 VIRTUAL_INPUT_NAME,
                 move |_timestamp, message, _| {
-                    // Forward all messages received on virtual input to virtual output
-                    if let Ok(mut output) = output_for_callback.lock() {
-                        if let Err(e) = output.send(message) {
-                            eprintln!("Error forwarding virtual input to output: {}", e);
+                    // Only forward if forwarding is enabled
+                    if forwarding_flag.load(Ordering::Relaxed) {
+                        if let Ok(mut output) = output_for_callback.lock() {
+                            if let Err(e) = output.send(message) {
+                                eprintln!("Error forwarding virtual input to output: {}", e);
+                            }
                         }
                     }
                 },
@@ -57,7 +65,18 @@ impl VirtualPorts {
         Ok(VirtualPorts {
             _input_connection: input_connection,
             _output_connection: output_shared,
+            forwarding_enabled,
         })
+    }
+
+    /// Enable forwarding from virtual input to virtual output
+    pub fn enable_forwarding(&self) {
+        self.forwarding_enabled.store(true, Ordering::Relaxed);
+    }
+
+    /// Disable forwarding from virtual input to virtual output
+    pub fn disable_forwarding(&self) {
+        self.forwarding_enabled.store(false, Ordering::Relaxed);
     }
 
     #[cfg(not(unix))]

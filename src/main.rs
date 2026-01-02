@@ -81,20 +81,17 @@ fn run_app<B: ratatui::backend::Backend>(
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         app.quit();
                     }
-                    KeyCode::Up => {
+                    KeyCode::Up | KeyCode::Char('k') => {
                         app.handle_key_up();
                     }
-                    KeyCode::Down => {
+                    KeyCode::Down | KeyCode::Char('j') => {
                         app.handle_key_down();
-                    }
-                    KeyCode::Tab => {
-                        app.handle_tab();
                     }
                     KeyCode::Char(' ') => {
                         app.handle_space();
                     }
-                    KeyCode::Char('d') => {
-                        app.handle_delete();
+                    KeyCode::Enter => {
+                        app.handle_enter();
                     }
                     KeyCode::Esc => {
                         app.handle_escape();

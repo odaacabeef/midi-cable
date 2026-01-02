@@ -43,15 +43,16 @@ impl MidiManager {
         }
     }
 
-    /// Lists all available MIDI input ports
+    /// Lists all available MIDI input ports (sources we can receive from)
+    /// Note: MidiOutput.ports() returns destinations, but virtual inputs appear as destinations
     /// Returns an empty list if MIDI system is not available
     pub fn list_input_ports() -> Vec<PortId> {
-        match MidiInput::new("mc-list") {
-            Ok(midi_in) => {
-                midi_in.ports()
+        match MidiOutput::new("mc-list") {
+            Ok(midi_out) => {
+                midi_out.ports()
                     .iter()
                     .filter_map(|port| {
-                        midi_in.port_name(port).ok().map(|name| {
+                        midi_out.port_name(port).ok().map(|name| {
                             let is_virtual = name == VIRTUAL_INPUT_NAME || name == VIRTUAL_OUTPUT_NAME;
                             PortId::new(name, is_virtual)
                         })
@@ -65,15 +66,16 @@ impl MidiManager {
         }
     }
 
-    /// Lists all available MIDI output ports
+    /// Lists all available MIDI output ports (destinations we can send to)
+    /// Note: MidiInput.ports() returns sources, but virtual outputs appear as sources
     /// Returns an empty list if MIDI system is not available
     pub fn list_output_ports() -> Vec<PortId> {
-        match MidiOutput::new("mc-list") {
-            Ok(midi_out) => {
-                midi_out.ports()
+        match MidiInput::new("mc-list") {
+            Ok(midi_in) => {
+                midi_in.ports()
                     .iter()
                     .filter_map(|port| {
-                        midi_out.port_name(port).ok().map(|name| {
+                        midi_in.port_name(port).ok().map(|name| {
                             let is_virtual = name == VIRTUAL_INPUT_NAME || name == VIRTUAL_OUTPUT_NAME;
                             PortId::new(name, is_virtual)
                         })
@@ -140,5 +142,19 @@ impl MidiManager {
     /// Checks if a connection exists
     pub fn has_connection(&self, connection: &Connection) -> bool {
         self.forwarders.contains_key(connection)
+    }
+
+    /// Enable virtual port forwarding (mc-virtual-in -> mc-virtual-out)
+    pub fn enable_virtual_forwarding(&self) {
+        if let Some(ref ports) = self.virtual_ports {
+            ports.enable_forwarding();
+        }
+    }
+
+    /// Disable virtual port forwarding (mc-virtual-in -> mc-virtual-out)
+    pub fn disable_virtual_forwarding(&self) {
+        if let Some(ref ports) = self.virtual_ports {
+            ports.disable_forwarding();
+        }
     }
 }

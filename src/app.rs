@@ -6,27 +6,17 @@ use std::collections::VecDeque;
 
 const MAX_LOG_MESSAGES: usize = 100;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PaneFocus {
-    Inputs,
-    Outputs,
-    Connections,
-}
-
 #[derive(Debug, Clone)]
 pub enum UiState {
+    /// Browsing inputs with cursor
     Idle {
-        focus: PaneFocus,
-        selected_input_idx: usize,
-        selected_output_idx: usize,
-        selected_connection_idx: usize,
+        cursor_idx: usize,
     },
-    SelectingSource {
-        selected_input_idx: usize,
-    },
-    SelectingDestination {
-        source: PortId,
-        selected_output_idx: usize,
+    /// Selected an input, now selecting outputs
+    SelectingOutputs {
+        input_idx: usize,
+        selected_outputs: Vec<usize>,
+        cursor_idx: usize,
     },
 }
 
@@ -35,12 +25,13 @@ pub struct App {
     pub midi_outputs: Vec<PortId>,
     pub active_connections: Vec<(Connection, ConnectionStatus)>,
     pub ui_state: UiState,
-    pub log_messages: VecDeque<String>,
     pub should_quit: bool,
 
     midi_manager: MidiManager,
     event_tx: Sender<AppEvent>,
     event_rx: Receiver<AppEvent>,
+    show_virtual_connection: bool,
+    virtual_connection: Option<Connection>,
 }
 
 impl App {
@@ -52,67 +43,50 @@ impl App {
             midi_inputs: Vec::new(),
             midi_outputs: Vec::new(),
             active_connections: Vec::new(),
-            ui_state: UiState::Idle {
-                focus: PaneFocus::Inputs,
-                selected_input_idx: 0,
-                selected_output_idx: 0,
-                selected_connection_idx: 0,
-            },
-            log_messages: VecDeque::new(),
+            ui_state: UiState::Idle { cursor_idx: 0 },
             should_quit: false,
             midi_manager,
             event_tx,
             event_rx,
+            show_virtual_connection: false,
+            virtual_connection: None,
         }
     }
 
     pub fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Try to initialize virtual ports (optional, won't fail if not supported)
-        if let Err(e) = self.midi_manager.init_virtual_ports() {
-            self.add_log(format!("Note: Virtual ports not available: {}", e));
-        }
+        let virtual_ports_created = self.midi_manager.init_virtual_ports().is_ok();
 
         // Refresh port lists
         self.refresh_ports();
 
-        // Add welcome message
-        if self.midi_inputs.is_empty() && self.midi_outputs.is_empty() {
-            self.add_log("No MIDI devices found. Connect a MIDI device or enable IAC Driver.".to_string());
-        } else {
-            self.add_log(format!("Found {} input(s) and {} output(s)",
-                self.midi_inputs.len(), self.midi_outputs.len()));
-        }
+        // If virtual ports were created, establish the default connection
+        if virtual_ports_created {
+            use crate::midi::virtual_ports::{VIRTUAL_INPUT_NAME, VIRTUAL_OUTPUT_NAME};
 
-        // Create default connection from virtual input to virtual output
-        // Note: This might fail if the ports aren't ready yet or if connecting virtual ports
-        // to each other isn't supported. We log but don't fail initialization.
-        if let Err(e) = self.create_default_connection() {
-            self.add_log(format!("Note: Could not create default virtual connection: {}", e));
-        }
+            // Find the virtual input and output
+            let virtual_input = self.midi_inputs.iter()
+                .find(|p| p.name == VIRTUAL_INPUT_NAME)
+                .cloned();
+            let virtual_output = self.midi_outputs.iter()
+                .find(|p| p.name == VIRTUAL_OUTPUT_NAME)
+                .cloned();
 
-        Ok(())
-    }
-
-    fn create_default_connection(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let virtual_in = self
-            .midi_inputs
-            .iter()
-            .find(|p| p.name == crate::midi::VIRTUAL_INPUT_NAME)
-            .cloned();
-
-        let virtual_out = self
-            .midi_outputs
-            .iter()
-            .find(|p| p.name == crate::midi::VIRTUAL_OUTPUT_NAME)
-            .cloned();
-
-        if let (Some(input), Some(output)) = (virtual_in, virtual_out) {
-            let connection = Connection::new(input, output);
-            self.start_connection(connection)?;
+            // Create the default connection if both ports exist
+            if let (Some(input), Some(output)) = (virtual_input, virtual_output) {
+                let connection = Connection::new(input, output);
+                // The virtual ports have built-in forwarding via the callback in virtual_ports.rs,
+                // so we track this connection separately and don't create a forwarder
+                self.virtual_connection = Some(connection);
+                self.show_virtual_connection = true;
+                // Update the connection list to show the virtual connection
+                self.update_connection_list();
+            }
         }
 
         Ok(())
     }
+
 
     pub fn refresh_ports(&mut self) {
         self.midi_inputs = MidiManager::list_input_ports();
@@ -122,14 +96,7 @@ impl App {
     pub fn process_events(&mut self) {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
-                AppEvent::Log(msg) => {
-                    self.add_log(msg);
-                }
-                AppEvent::Error(msg) => {
-                    self.add_log(format!("ERROR: {}", msg));
-                }
-                AppEvent::ConnectionStatus { connection, status } => {
-                    self.add_log(format!("{}: {}", connection, status));
+                AppEvent::ConnectionStatus { .. } => {
                     self.update_connection_list();
                 }
                 AppEvent::PortsChanged => {
@@ -140,66 +107,79 @@ impl App {
         }
     }
 
-    fn add_log(&mut self, msg: String) {
-        self.log_messages.push_back(msg);
-        if self.log_messages.len() > MAX_LOG_MESSAGES {
-            self.log_messages.pop_front();
-        }
-    }
 
     fn update_connection_list(&mut self) {
         let statuses = self.midi_manager.get_connection_statuses();
         self.active_connections = statuses.into_iter().collect();
+
+        // Add virtual connection if it should be shown
+        if self.show_virtual_connection {
+            if let Some(ref conn) = self.virtual_connection {
+                self.active_connections.push((conn.clone(), ConnectionStatus::Active));
+            }
+        }
     }
 
     pub fn start_connection(&mut self, connection: Connection) -> Result<(), Box<dyn std::error::Error>> {
+        // Check if this is the virtual connection
+        if let Some(ref virtual_conn) = self.virtual_connection {
+            if &connection == virtual_conn {
+                // Enable forwarding and show it in the UI
+                self.midi_manager.enable_virtual_forwarding();
+                self.show_virtual_connection = true;
+                self.update_connection_list();
+                return Ok(());
+            }
+        }
+
+        // Regular connection - start the forwarder
         self.midi_manager.start_connection(connection.clone())?;
         self.update_connection_list();
         Ok(())
     }
 
     pub fn stop_connection(&mut self, connection: &Connection) {
+        // Check if this is the virtual connection
+        if let Some(ref virtual_conn) = self.virtual_connection {
+            if connection == virtual_conn {
+                // Disable forwarding and hide from the UI
+                self.midi_manager.disable_virtual_forwarding();
+                self.show_virtual_connection = false;
+                self.update_connection_list();
+                return;
+            }
+        }
+
+        // Regular connection - stop the forwarder
         self.midi_manager.stop_connection(connection);
         self.update_connection_list();
     }
 
-    pub fn get_selected_input_idx(&self) -> Option<usize> {
-        match &self.ui_state {
-            UiState::Idle { selected_input_idx, focus, .. } if *focus == PaneFocus::Inputs => {
-                Some(*selected_input_idx)
-            }
-            UiState::SelectingSource { selected_input_idx } => Some(*selected_input_idx),
-            _ => None,
-        }
+    /// Get outputs connected to a specific input
+    pub fn get_connected_outputs(&self, input: &PortId) -> Vec<PortId> {
+        self.active_connections
+            .iter()
+            .filter(|(conn, _)| &conn.input == input)
+            .map(|(conn, _)| conn.output.clone())
+            .collect()
     }
 
-    pub fn get_selected_output_idx(&self) -> Option<usize> {
-        match &self.ui_state {
-            UiState::Idle { selected_output_idx, focus, .. } if *focus == PaneFocus::Outputs => {
-                Some(*selected_output_idx)
-            }
-            UiState::SelectingDestination { selected_output_idx, .. } => Some(*selected_output_idx),
-            _ => None,
-        }
+    /// Check if an output is connected to a specific input
+    pub fn is_output_connected(&self, input: &PortId, output: &PortId) -> bool {
+        self.active_connections
+            .iter()
+            .any(|(conn, _)| &conn.input == input && &conn.output == output)
     }
 
     // Keyboard input handlers
 
     pub fn handle_key_up(&mut self) {
         match &mut self.ui_state {
-            UiState::Idle { focus, selected_input_idx, selected_output_idx, selected_connection_idx } => {
-                match focus {
-                    PaneFocus::Inputs if *selected_input_idx > 0 => *selected_input_idx -= 1,
-                    PaneFocus::Outputs if *selected_output_idx > 0 => *selected_output_idx -= 1,
-                    PaneFocus::Connections if *selected_connection_idx > 0 => *selected_connection_idx -= 1,
-                    _ => {}
-                }
+            UiState::Idle { cursor_idx } if *cursor_idx > 0 => {
+                *cursor_idx -= 1;
             }
-            UiState::SelectingSource { selected_input_idx } if *selected_input_idx > 0 => {
-                *selected_input_idx -= 1
-            }
-            UiState::SelectingDestination { selected_output_idx, .. } if *selected_output_idx > 0 => {
-                *selected_output_idx -= 1
+            UiState::SelectingOutputs { cursor_idx, .. } if *cursor_idx > 0 => {
+                *cursor_idx -= 1;
             }
             _ => {}
         }
@@ -207,101 +187,96 @@ impl App {
 
     pub fn handle_key_down(&mut self) {
         match &mut self.ui_state {
-            UiState::Idle { focus, selected_input_idx, selected_output_idx, selected_connection_idx } => {
-                match focus {
-                    PaneFocus::Inputs if *selected_input_idx < self.midi_inputs.len().saturating_sub(1) => {
-                        *selected_input_idx += 1
-                    }
-                    PaneFocus::Outputs if *selected_output_idx < self.midi_outputs.len().saturating_sub(1) => {
-                        *selected_output_idx += 1
-                    }
-                    PaneFocus::Connections if *selected_connection_idx < self.active_connections.len().saturating_sub(1) => {
-                        *selected_connection_idx += 1
-                    }
-                    _ => {}
-                }
+            UiState::Idle { cursor_idx } if *cursor_idx < self.midi_inputs.len().saturating_sub(1) => {
+                *cursor_idx += 1;
             }
-            UiState::SelectingSource { selected_input_idx } if *selected_input_idx < self.midi_inputs.len().saturating_sub(1) => {
-                *selected_input_idx += 1
-            }
-            UiState::SelectingDestination { selected_output_idx, .. } if *selected_output_idx < self.midi_outputs.len().saturating_sub(1) => {
-                *selected_output_idx += 1
+            UiState::SelectingOutputs { cursor_idx, .. } if *cursor_idx < self.midi_outputs.len().saturating_sub(1) => {
+                *cursor_idx += 1;
             }
             _ => {}
-        }
-    }
-
-    pub fn handle_tab(&mut self) {
-        if let UiState::Idle { focus, selected_input_idx, selected_output_idx, selected_connection_idx } = &self.ui_state {
-            let new_focus = match focus {
-                PaneFocus::Inputs => PaneFocus::Outputs,
-                PaneFocus::Outputs => PaneFocus::Connections,
-                PaneFocus::Connections => PaneFocus::Inputs,
-            };
-
-            self.ui_state = UiState::Idle {
-                focus: new_focus,
-                selected_input_idx: *selected_input_idx,
-                selected_output_idx: *selected_output_idx,
-                selected_connection_idx: *selected_connection_idx,
-            };
         }
     }
 
     pub fn handle_space(&mut self) {
-        match &self.ui_state {
-            UiState::Idle { focus: PaneFocus::Inputs, selected_input_idx, .. } => {
-                // Start selecting a source
-                self.ui_state = UiState::SelectingSource {
-                    selected_input_idx: *selected_input_idx,
-                };
-            }
-            UiState::SelectingSource { selected_input_idx } => {
-                // Move to destination selection
-                if let Some(source) = self.midi_inputs.get(*selected_input_idx).cloned() {
-                    self.ui_state = UiState::SelectingDestination {
-                        source,
-                        selected_output_idx: 0,
+        match self.ui_state.clone() {
+            UiState::Idle { cursor_idx } => {
+                // Select the input and jump to output selection
+                if let Some(input) = self.midi_inputs.get(cursor_idx) {
+                    // Get currently connected outputs for this input
+                    let selected_outputs: Vec<usize> = self
+                        .get_connected_outputs(input)
+                        .iter()
+                        .filter_map(|out| {
+                            self.midi_outputs.iter().position(|o| o == out)
+                        })
+                        .collect();
+
+                    self.ui_state = UiState::SelectingOutputs {
+                        input_idx: cursor_idx,
+                        selected_outputs,
+                        cursor_idx: 0,
                     };
                 }
             }
-            UiState::SelectingDestination { source, selected_output_idx } => {
-                // Create connection
-                if let Some(dest) = self.midi_outputs.get(*selected_output_idx).cloned() {
-                    let connection = Connection::new(source.clone(), dest);
-                    let _ = self.start_connection(connection);
+            UiState::SelectingOutputs {
+                mut selected_outputs,
+                cursor_idx,
+                input_idx,
+            } => {
+                // Toggle output selection
+                if let Some(pos) = selected_outputs.iter().position(|&idx| idx == cursor_idx) {
+                    selected_outputs.remove(pos);
+                } else {
+                    selected_outputs.push(cursor_idx);
                 }
 
-                // Return to idle
-                self.ui_state = UiState::Idle {
-                    focus: PaneFocus::Inputs,
-                    selected_input_idx: 0,
-                    selected_output_idx: 0,
-                    selected_connection_idx: 0,
+                self.ui_state = UiState::SelectingOutputs {
+                    input_idx,
+                    selected_outputs,
+                    cursor_idx,
                 };
             }
-            _ => {}
         }
     }
 
-    pub fn handle_delete(&mut self) {
-        if let UiState::Idle { focus: PaneFocus::Connections, selected_connection_idx, .. } = &self.ui_state {
-            if let Some((connection, _)) = self.active_connections.get(*selected_connection_idx) {
-                let connection = connection.clone();
-                self.stop_connection(&connection);
+    pub fn handle_enter(&mut self) {
+        if let UiState::SelectingOutputs {
+            input_idx,
+            selected_outputs,
+            ..
+        } = &self.ui_state.clone()
+        {
+            if let Some(input) = self.midi_inputs.get(*input_idx).cloned() {
+                // Remove all existing connections for this input
+                let existing_connections: Vec<Connection> = self
+                    .active_connections
+                    .iter()
+                    .filter(|(conn, _)| &conn.input == &input)
+                    .map(|(conn, _)| conn.clone())
+                    .collect();
+
+                for conn in existing_connections {
+                    self.stop_connection(&conn);
+                }
+
+                // Create new connections for selected outputs
+                for &output_idx in selected_outputs {
+                    if let Some(output) = self.midi_outputs.get(output_idx).cloned() {
+                        let connection = Connection::new(input.clone(), output);
+                        let _ = self.start_connection(connection);
+                    }
+                }
             }
+
+            // Return to idle
+            self.ui_state = UiState::Idle { cursor_idx: 0 };
         }
     }
 
     pub fn handle_escape(&mut self) {
         // Cancel selection and return to idle
-        if !matches!(&self.ui_state, UiState::Idle { .. }) {
-            self.ui_state = UiState::Idle {
-                focus: PaneFocus::Inputs,
-                selected_input_idx: 0,
-                selected_output_idx: 0,
-                selected_connection_idx: 0,
-            };
+        if matches!(&self.ui_state, UiState::SelectingOutputs { .. }) {
+            self.ui_state = UiState::Idle { cursor_idx: 0 };
         }
     }
 
