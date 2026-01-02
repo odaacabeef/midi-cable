@@ -3,14 +3,16 @@ use crate::events::AppEvent;
 use crate::midi::forwarder::{start_forwarder, ForwarderHandle};
 use crate::midi::virtual_ports::{VirtualPorts, VIRTUAL_INPUT_NAME, VIRTUAL_OUTPUT_NAME};
 use crossbeam::channel::Sender;
-use midir::{MidiInput, MidiOutput};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Manages MIDI ports and connections
 pub struct MidiManager {
     pub virtual_ports: Option<VirtualPorts>,
     forwarders: HashMap<Connection, ForwarderHandle>,
     event_tx: Sender<AppEvent>,
+    monitoring_active: Arc<AtomicBool>,
 }
 
 impl MidiManager {
@@ -20,6 +22,7 @@ impl MidiManager {
             virtual_ports: None,
             forwarders: HashMap::new(),
             event_tx,
+            monitoring_active: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -47,6 +50,8 @@ impl MidiManager {
     /// Note: MidiOutput.ports() returns destinations, but virtual inputs appear as destinations
     /// Returns an empty list if MIDI system is not available
     pub fn list_input_ports() -> Vec<PortId> {
+        use midir::MidiOutput;
+
         match MidiOutput::new("mc-list") {
             Ok(midi_out) => {
                 midi_out.ports()
@@ -59,10 +64,7 @@ impl MidiManager {
                     })
                     .collect()
             }
-            Err(_) => {
-                // MIDI system not available - return empty list
-                Vec::new()
-            }
+            Err(_) => Vec::new(),
         }
     }
 
@@ -70,6 +72,8 @@ impl MidiManager {
     /// Note: MidiInput.ports() returns sources, but virtual outputs appear as sources
     /// Returns an empty list if MIDI system is not available
     pub fn list_output_ports() -> Vec<PortId> {
+        use midir::MidiInput;
+
         match MidiInput::new("mc-list") {
             Ok(midi_in) => {
                 midi_in.ports()
@@ -82,10 +86,7 @@ impl MidiManager {
                     })
                     .collect()
             }
-            Err(_) => {
-                // MIDI system not available - return empty list
-                Vec::new()
-            }
+            Err(_) => Vec::new(),
         }
     }
 
@@ -156,5 +157,32 @@ impl MidiManager {
         if let Some(ref ports) = self.virtual_ports {
             ports.disable_forwarding();
         }
+    }
+
+    /// Start monitoring for MIDI port changes (hot-plug detection)
+    /// Uses subprocess-based monitoring to get fresh device enumeration
+    pub fn start_port_monitoring(&mut self) {
+        self.monitoring_active.store(true, Ordering::Relaxed);
+
+        #[cfg(target_os = "macos")]
+        {
+            use crate::midi::monitor::macos;
+            if let Err(e) = macos::start_monitor(self.event_tx.clone()) {
+                eprintln!("Failed to start MIDI monitor: {}", e);
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            use crate::midi::monitor::other;
+            if let Err(e) = other::start_monitor(self.event_tx.clone()) {
+                eprintln!("Failed to start MIDI monitor: {}", e);
+            }
+        }
+    }
+
+    /// Stop monitoring for MIDI port changes
+    pub fn stop_port_monitoring(&self) {
+        self.monitoring_active.store(false, Ordering::Relaxed);
     }
 }

@@ -1,4 +1,4 @@
-use crate::connection::Connection;
+use crate::connection::{Connection, PortId};
 
 /// Events sent between threads
 #[derive(Debug, Clone)]
@@ -23,4 +23,10 @@ pub enum AppEvent {
 
     /// MIDI ports changed (hotplug event)
     PortsChanged,
+
+    /// Updated port lists from subprocess enumeration
+    PortListUpdate {
+        inputs: Vec<PortId>,
+        outputs: Vec<PortId>,
+    },
 }

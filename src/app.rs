@@ -2,9 +2,6 @@ use crate::connection::{Connection, ConnectionStatus, PortId};
 use crate::events::AppEvent;
 use crate::midi::MidiManager;
 use crossbeam::channel::{Receiver, Sender};
-use std::collections::VecDeque;
-
-const MAX_LOG_MESSAGES: usize = 100;
 
 #[derive(Debug, Clone)]
 pub enum UiState {
@@ -84,6 +81,9 @@ impl App {
             }
         }
 
+        // Start monitoring for port changes (hot-plug detection)
+        self.midi_manager.start_port_monitoring();
+
         Ok(())
     }
 
@@ -100,11 +100,49 @@ impl App {
                     self.update_connection_list();
                 }
                 AppEvent::PortsChanged => {
-                    self.refresh_ports();
+                    self.handle_ports_changed();
+                }
+                AppEvent::PortListUpdate { inputs, outputs } => {
+                    // Directly update port lists from subprocess enumeration
+                    self.midi_inputs = inputs;
+                    self.midi_outputs = outputs;
+                    // Clean up stale connections
+                    self.cleanup_stale_connections();
                 }
                 _ => {}
             }
         }
+    }
+
+    fn handle_ports_changed(&mut self) {
+        // Refresh port lists
+        self.refresh_ports();
+        self.cleanup_stale_connections();
+    }
+
+    fn cleanup_stale_connections(&mut self) {
+        // Find connections that reference removed ports
+        let stale_connections: Vec<Connection> = self
+            .active_connections
+            .iter()
+            .filter(|(conn, _)| {
+                // Check if input port still exists
+                let input_exists = self.midi_inputs.iter().any(|p| p == &conn.input);
+                // Check if output port still exists
+                let output_exists = self.midi_outputs.iter().any(|p| p == &conn.output);
+                // Connection is stale if either port is missing
+                !input_exists || !output_exists
+            })
+            .map(|(conn, _)| conn.clone())
+            .collect();
+
+        // Stop all stale connections
+        for conn in stale_connections {
+            self.stop_connection(&conn);
+        }
+
+        // Update the connection list to reflect changes
+        self.update_connection_list();
     }
 
 
@@ -280,7 +318,14 @@ impl App {
         }
     }
 
+    pub fn handle_refresh(&mut self) {
+        // Manually refresh the port lists and clean up stale connections
+        self.handle_ports_changed();
+    }
+
     pub fn quit(&mut self) {
+        // Stop port monitoring
+        self.midi_manager.stop_port_monitoring();
         self.should_quit = true;
     }
 }

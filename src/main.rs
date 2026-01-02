@@ -15,6 +15,12 @@ use std::io;
 use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Check for CLI mode
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && args[1] == "--list-ports" {
+        return list_ports_and_exit();
+    }
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -60,6 +66,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// CLI mode: list all MIDI ports and exit
+/// This creates a fresh MIDI context that sees current system state
+fn list_ports_and_exit() -> Result<(), Box<dyn std::error::Error>> {
+    use midi::MidiManager;
+
+    let inputs = MidiManager::list_input_ports();
+    let outputs = MidiManager::list_output_ports();
+
+    // Print in JSON format for easy parsing
+    println!("{{");
+    println!("  \"inputs\": [");
+    for (i, port) in inputs.iter().enumerate() {
+        let comma = if i < inputs.len() - 1 { "," } else { "" };
+        println!("    \"{}\"{}",port.name, comma);
+    }
+    println!("  ],");
+    println!("  \"outputs\": [");
+    for (i, port) in outputs.iter().enumerate() {
+        let comma = if i < outputs.len() - 1 { "," } else { "" };
+        println!("    \"{}\"{}",port.name, comma);
+    }
+    println!("  ]");
+    println!("}}");
+
+    Ok(())
+}
+
 fn run_app<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
@@ -80,6 +113,9 @@ fn run_app<B: ratatui::backend::Backend>(
                     }
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         app.quit();
+                    }
+                    KeyCode::Char('R') => {
+                        app.handle_refresh();
                     }
                     KeyCode::Up | KeyCode::Char('k') => {
                         app.handle_key_up();
