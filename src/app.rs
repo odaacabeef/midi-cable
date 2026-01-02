@@ -27,8 +27,6 @@ pub struct App {
     midi_manager: MidiManager,
     _event_tx: Sender<AppEvent>,
     event_rx: Receiver<AppEvent>,
-    show_virtual_connection: bool,
-    virtual_connection: Option<Connection>,
 }
 
 impl App {
@@ -45,8 +43,6 @@ impl App {
             midi_manager,
             _event_tx: event_tx,
             event_rx,
-            show_virtual_connection: false,
-            virtual_connection: None,
         }
     }
 
@@ -72,11 +68,8 @@ impl App {
             // Create the default connection if both ports exist
             if let (Some(input), Some(output)) = (virtual_input, virtual_output) {
                 let connection = Connection::new(input, output);
-                // The virtual ports have built-in forwarding via the callback in virtual_ports.rs,
-                // so we track this connection separately and don't create a forwarder
-                self.virtual_connection = Some(connection);
-                self.show_virtual_connection = true;
-                // Update the connection list to show the virtual connection
+                // Create the default virtual connection
+                let _ = self.midi_manager.start_connection(connection);
                 self.update_connection_list();
             }
         }
@@ -145,46 +138,15 @@ impl App {
     fn update_connection_list(&mut self) {
         let statuses = self.midi_manager.get_connection_statuses();
         self.active_connections = statuses.into_iter().collect();
-
-        // Add virtual connection if it should be shown
-        if self.show_virtual_connection {
-            if let Some(ref conn) = self.virtual_connection {
-                self.active_connections.push((conn.clone(), ConnectionStatus::Active));
-            }
-        }
     }
 
     pub fn start_connection(&mut self, connection: Connection) -> Result<(), Box<dyn std::error::Error>> {
-        // Check if this is the virtual connection
-        if let Some(ref virtual_conn) = self.virtual_connection {
-            if &connection == virtual_conn {
-                // Enable forwarding and show it in the UI
-                self.midi_manager.enable_virtual_forwarding();
-                self.show_virtual_connection = true;
-                self.update_connection_list();
-                return Ok(());
-            }
-        }
-
-        // Regular connection - start the forwarder
         self.midi_manager.start_connection(connection.clone())?;
         self.update_connection_list();
         Ok(())
     }
 
     pub fn stop_connection(&mut self, connection: &Connection) {
-        // Check if this is the virtual connection
-        if let Some(ref virtual_conn) = self.virtual_connection {
-            if connection == virtual_conn {
-                // Disable forwarding and hide from the UI
-                self.midi_manager.disable_virtual_forwarding();
-                self.show_virtual_connection = false;
-                self.update_connection_list();
-                return;
-            }
-        }
-
-        // Regular connection - stop the forwarder
         self.midi_manager.stop_connection(connection);
         self.update_connection_list();
     }
@@ -290,7 +252,9 @@ impl App {
                 for &output_idx in selected_outputs {
                     if let Some(output) = self.midi_outputs.get(output_idx).cloned() {
                         let connection = Connection::new(input.clone(), output);
-                        let _ = self.start_connection(connection);
+                        if let Err(e) = self.start_connection(connection) {
+                            eprintln!("Failed to create connection: {}", e);
+                        }
                     }
                 }
             }
