@@ -25,11 +25,22 @@ impl MidiManager {
 
     /// Initialize virtual ports
     pub fn init_virtual_ports(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // TODO: Virtual ports temporarily disabled due to CoreMIDI issues
-        let _ = self.event_tx.send(AppEvent::Log(
-            "Virtual ports not yet implemented".to_string()
-        ));
-        Ok(())
+        match VirtualPorts::create() {
+            Ok(ports) => {
+                self.virtual_ports = Some(ports);
+                let _ = self.event_tx.send(AppEvent::Log(format!(
+                    "Created virtual ports: {} and {}",
+                    VIRTUAL_INPUT_NAME, VIRTUAL_OUTPUT_NAME
+                )));
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self
+                    .event_tx
+                    .send(AppEvent::Error(format!("Failed to create virtual ports: {}", e)));
+                Err(e.into())
+            }
+        }
     }
 
     /// Lists all available MIDI input ports

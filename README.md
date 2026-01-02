@@ -6,6 +6,7 @@ TUI application for managing MIDI message routing between devices.
 
 - **Interactive TUI**: Terminal-based interface for managing MIDI connections
 - **Multiple Simultaneous Connections**: Route MIDI from multiple inputs to multiple outputs at once
+- **Virtual MIDI Ports**: Creates `mc-virtual-in` and `mc-virtual-out` ports automatically
 - **Real-time Message Forwarding**: Low-latency MIDI message routing
 - **Message Validation**: Validates MIDI messages before forwarding
 - **Program Change Handling**: Special handling for Program Change messages
@@ -93,9 +94,23 @@ Multiple simultaneous connections are supported. Each connection:
 - Validates messages before forwarding
 - Reports errors without crashing
 
+### Virtual MIDI Ports
+
+On startup, the application creates two virtual MIDI ports:
+- **mc-virtual-in**: A virtual input port that other applications can send MIDI to
+- **mc-virtual-out**: A virtual output port that other applications can receive MIDI from
+
+**Automatic Forwarding**: By default, any MIDI messages sent to `mc-virtual-in` are automatically forwarded to `mc-virtual-out`. This creates a virtual MIDI cable that other applications can use.
+
+These ports appear in your system's MIDI device list and can be:
+- Used as a MIDI cable (send to `mc-virtual-in`, receive from `mc-virtual-out`)
+- Used by other MIDI applications (e.g., DAWs can send to `mc-virtual-in` or receive from `mc-virtual-out`)
+- Combined with physical MIDI devices in the routing matrix (e.g., route `Hardware Keyboard → mc-virtual-out`)
+
+The virtual ports exist as long as the application is running.
+
 ## Known Issues / TODO
 
-- Virtual MIDI ports (mc-virtual-in / mc-virtual-out) are not yet implemented
 - Port hotplugging not yet supported
 - Connections are not persisted between sessions
 

@@ -1,26 +1,69 @@
 use anyhow::Result;
 use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
-
-// Import traits for virtual port creation (Unix/macOS only)
-#[cfg(unix)]
-use midir::os::unix::{VirtualInput, VirtualOutput};
+use std::sync::{Arc, Mutex};
 
 pub const VIRTUAL_INPUT_NAME: &str = "mc-virtual-in";
 pub const VIRTUAL_OUTPUT_NAME: &str = "mc-virtual-out";
 
-/// Manages virtual MIDI ports
+/// Manages virtual MIDI ports with automatic forwarding from input to output
 /// These connections must be kept alive for the virtual ports to remain available in the system
 pub struct VirtualPorts {
-    // Placeholder for future implementation
-    _dummy: (),
+    // Keep the connections alive - dropping them will destroy the virtual ports
+    _input_connection: MidiInputConnection<()>,
+    _output_connection: Arc<Mutex<MidiOutputConnection>>,
 }
 
 impl VirtualPorts {
     /// Creates virtual MIDI input and output ports
     /// The ports will appear in the system as long as this struct is alive
+    /// Messages sent to mc-virtual-in are automatically forwarded to mc-virtual-out
+    #[cfg(unix)]
     pub fn create() -> Result<Self> {
-        // TODO: Implement virtual port creation
-        // Currently disabled - returns error which is caught and logged
-        Err(anyhow::anyhow!("Virtual ports not yet implemented"))
+        use midir::os::unix::{VirtualInput, VirtualOutput};
+
+        // Create MIDI input and output objects
+        let midi_in = MidiInput::new("mc")?;
+        let midi_out = MidiOutput::new("mc")?;
+
+        // Create virtual output port first
+        // This port will appear as "mc-virtual-out" in the system
+        // Other applications can receive MIDI from this port
+        let output_connection = midi_out
+            .create_virtual(VIRTUAL_OUTPUT_NAME)
+            .map_err(|e| anyhow::anyhow!("Failed to create virtual output: {:?}", e))?;
+
+        // Wrap output in Arc<Mutex> so we can use it in the input callback
+        let output_shared = Arc::new(Mutex::new(output_connection));
+        let output_for_callback = Arc::clone(&output_shared);
+
+        // Create virtual input port with forwarding callback
+        // This port will appear as "mc-virtual-in" in the system
+        // Other applications can send MIDI to this port
+        let input_connection = midi_in
+            .create_virtual(
+                VIRTUAL_INPUT_NAME,
+                move |_timestamp, message, _| {
+                    // Forward all messages received on virtual input to virtual output
+                    if let Ok(mut output) = output_for_callback.lock() {
+                        if let Err(e) = output.send(message) {
+                            eprintln!("Error forwarding virtual input to output: {}", e);
+                        }
+                    }
+                },
+                (),
+            )
+            .map_err(|e| anyhow::anyhow!("Failed to create virtual input: {:?}", e))?;
+
+        Ok(VirtualPorts {
+            _input_connection: input_connection,
+            _output_connection: output_shared,
+        })
+    }
+
+    #[cfg(not(unix))]
+    pub fn create() -> Result<Self> {
+        Err(anyhow::anyhow!(
+            "Virtual ports are only supported on Unix/macOS/Linux platforms"
+        ))
     }
 }
