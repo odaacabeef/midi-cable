@@ -1,0 +1,25 @@
+[package]
+name = "midi-cable"
+version = "0.2.0"
+edition = "2021"
+authors = ["Your Name <your.email@example.com>"]
+description = "TUI for managing MIDI message routing between devices"
+
+[[bin]]
+name = "mc"
+path = "src/main.rs"
+
+[dependencies]
+# MIDI
+midir = "0.9"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Threading and channels
+crossbeam = "0.8"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
