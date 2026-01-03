@@ -1,7 +1,10 @@
 use crate::connection::{Connection, ConnectionStatus, PortId};
 use crate::events::AppEvent;
 use crate::midi::forwarder::{start_forwarder, ForwarderHandle};
-use crate::midi::virtual_ports::{VirtualPorts, VIRTUAL_INPUT_NAME, VIRTUAL_OUTPUT_NAME};
+use crate::midi::virtual_ports::{
+    VirtualPorts, VIRTUAL_INPUT_A_NAME, VIRTUAL_INPUT_B_NAME,
+    VIRTUAL_OUTPUT_A_NAME, VIRTUAL_OUTPUT_B_NAME
+};
 use crossbeam::channel::Sender;
 use midir::MidiOutputConnection;
 use std::collections::HashMap;
@@ -44,7 +47,7 @@ impl MidiManager {
     }
 
     /// Lists all available MIDI input ports (sources we can receive from)
-    /// Returns hardware outputs (sources) + virtual input created by this app
+    /// Returns hardware outputs (sources) + virtual inputs created by this app
     pub fn list_input_ports() -> Vec<PortId> {
         use midir::{MidiInput, MidiOutput};
         use std::collections::HashSet;
@@ -55,18 +58,20 @@ impl MidiManager {
         if let Ok(midi_in) = MidiInput::new("mc-list") {
             for port in midi_in.ports().iter() {
                 if let Ok(name) = midi_in.port_name(port) {
-                    if name != VIRTUAL_OUTPUT_NAME && name != VIRTUAL_INPUT_NAME {
+                    if name != VIRTUAL_OUTPUT_A_NAME && name != VIRTUAL_OUTPUT_B_NAME
+                        && name != VIRTUAL_INPUT_A_NAME && name != VIRTUAL_INPUT_B_NAME
+                    {
                         ports.insert(PortId::new(name, false));
                     }
                 }
             }
         }
 
-        // Add virtual input created by this app (appears as destination in MidiOutput.ports)
+        // Add virtual inputs created by this app (appear as destinations in MidiOutput.ports)
         if let Ok(midi_out) = MidiOutput::new("mc-list") {
             for port in midi_out.ports().iter() {
                 if let Ok(name) = midi_out.port_name(port) {
-                    if name == VIRTUAL_INPUT_NAME {
+                    if name == VIRTUAL_INPUT_A_NAME || name == VIRTUAL_INPUT_B_NAME {
                         ports.insert(PortId::new(name, true));
                     }
                 }
@@ -86,7 +91,7 @@ impl MidiManager {
     }
 
     /// Lists all available MIDI output ports (destinations we can send to)
-    /// Returns hardware inputs (destinations) + virtual output created by this app
+    /// Returns hardware inputs (destinations) + virtual outputs created by this app
     pub fn list_output_ports() -> Vec<PortId> {
         use midir::{MidiInput, MidiOutput};
         use std::collections::HashSet;
@@ -97,18 +102,20 @@ impl MidiManager {
         if let Ok(midi_out) = MidiOutput::new("mc-list") {
             for port in midi_out.ports().iter() {
                 if let Ok(name) = midi_out.port_name(port) {
-                    if name != VIRTUAL_INPUT_NAME && name != VIRTUAL_OUTPUT_NAME {
+                    if name != VIRTUAL_INPUT_A_NAME && name != VIRTUAL_INPUT_B_NAME
+                        && name != VIRTUAL_OUTPUT_A_NAME && name != VIRTUAL_OUTPUT_B_NAME
+                    {
                         ports.insert(PortId::new(name, false));
                     }
                 }
             }
         }
 
-        // Add virtual output created by this app (appears as source in MidiInput.ports)
+        // Add virtual outputs created by this app (appear as sources in MidiInput.ports)
         if let Ok(midi_in) = MidiInput::new("mc-list") {
             for port in midi_in.ports().iter() {
                 if let Ok(name) = midi_in.port_name(port) {
-                    if name == VIRTUAL_OUTPUT_NAME {
+                    if name == VIRTUAL_OUTPUT_A_NAME || name == VIRTUAL_OUTPUT_B_NAME {
                         ports.insert(PortId::new(name, true));
                     }
                 }
@@ -140,11 +147,16 @@ impl MidiManager {
             )) as Box<dyn std::error::Error>);
         }
 
-        // Check if input is the virtual input created by this app
-        if connection.input.name == VIRTUAL_INPUT_NAME && connection.input.is_virtual {
+        // Check if input is one of the virtual inputs created by this app
+        if (connection.input.name == VIRTUAL_INPUT_A_NAME || connection.input.name == VIRTUAL_INPUT_B_NAME)
+            && connection.input.is_virtual
+        {
             // Use virtual port broadcast instead of regular forwarder
             if let Some(ref virtual_ports) = self.virtual_ports {
-                let output_handle = virtual_ports.add_virtual_input_output(&connection.output.name)?;
+                let output_handle = virtual_ports.add_virtual_input_output(
+                    &connection.input.name,
+                    &connection.output.name
+                )?;
                 self.virtual_input_outputs.insert(connection.clone(), output_handle);
                 let _ = self.event_tx.send(AppEvent::ConnectionStatus);
                 return Ok(());
@@ -177,7 +189,7 @@ impl MidiManager {
         if let Some(output_handle) = self.virtual_input_outputs.remove(connection) {
             // Remove from virtual ports broadcast list
             if let Some(ref virtual_ports) = self.virtual_ports {
-                virtual_ports.remove_virtual_input_output(&output_handle);
+                virtual_ports.remove_virtual_input_output(&connection.input.name, &output_handle);
             }
             // The handle will be dropped, closing the MIDI connection
             return;

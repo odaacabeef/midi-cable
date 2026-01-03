@@ -134,9 +134,9 @@ fn render_help(f: &mut Frame) {
         Line::from("  ?                Toggle this help screen"),
         Line::from("  q or ctrl+c      Quit application"),
         Line::from(""),
-        Line::from("Virtual Ports:"),
-        Line::from("  mc-virtual-in    Virtual input (other apps send to this)"),
-        Line::from("  mc-virtual-out   Virtual output (other apps receive from this)"),
+        Line::from("Virtual Ports (two pairs for message isolation):"),
+        Line::from("  mc-in-a / mc-out-a     Pair A (e.g., voice messages)"),
+        Line::from("  mc-in-b / mc-out-b     Pair B (e.g., sync messages)"),
     ];
 
     let paragraph = Paragraph::new(help_text);

@@ -55,25 +55,42 @@ impl App {
         // Refresh port lists
         self.refresh_ports();
 
-        // If virtual ports were created, establish the default connection
+        // If virtual ports were created, establish the default connections
         if virtual_ports_created {
-            use crate::midi::virtual_ports::{VIRTUAL_INPUT_NAME, VIRTUAL_OUTPUT_NAME};
+            use crate::midi::virtual_ports::{
+                VIRTUAL_INPUT_A_NAME, VIRTUAL_OUTPUT_A_NAME,
+                VIRTUAL_INPUT_B_NAME, VIRTUAL_OUTPUT_B_NAME
+            };
 
-            // Find the virtual input and output
-            let virtual_input = self.midi_inputs.iter()
-                .find(|p| p.name == VIRTUAL_INPUT_NAME)
+            // Find pair A ports
+            let virtual_input_a = self.midi_inputs.iter()
+                .find(|p| p.name == VIRTUAL_INPUT_A_NAME)
                 .cloned();
-            let virtual_output = self.midi_outputs.iter()
-                .find(|p| p.name == VIRTUAL_OUTPUT_NAME)
+            let virtual_output_a = self.midi_outputs.iter()
+                .find(|p| p.name == VIRTUAL_OUTPUT_A_NAME)
                 .cloned();
 
-            // Create the default connection if both ports exist
-            if let (Some(input), Some(output)) = (virtual_input, virtual_output) {
+            // Create default connection for pair A
+            if let (Some(input), Some(output)) = (virtual_input_a, virtual_output_a) {
                 let connection = Connection::new(input, output);
-                // Create the default virtual connection
                 let _ = self.midi_manager.start_connection(connection);
-                self.update_connection_list();
             }
+
+            // Find pair B ports
+            let virtual_input_b = self.midi_inputs.iter()
+                .find(|p| p.name == VIRTUAL_INPUT_B_NAME)
+                .cloned();
+            let virtual_output_b = self.midi_outputs.iter()
+                .find(|p| p.name == VIRTUAL_OUTPUT_B_NAME)
+                .cloned();
+
+            // Create default connection for pair B
+            if let (Some(input), Some(output)) = (virtual_input_b, virtual_output_b) {
+                let connection = Connection::new(input, output);
+                let _ = self.midi_manager.start_connection(connection);
+            }
+
+            self.update_connection_list();
         }
 
         // Start monitoring for port changes (hot-plug detection)

@@ -55,7 +55,10 @@ pub mod macos {
     /// Parse JSON output from --list-ports into PortId vectors
     pub(super) fn parse_port_json(json: &str) -> Result<(Vec<crate::connection::PortId>, Vec<crate::connection::PortId>), Box<dyn std::error::Error>> {
         use crate::connection::PortId;
-        use crate::midi::virtual_ports::{VIRTUAL_INPUT_NAME, VIRTUAL_OUTPUT_NAME};
+        use crate::midi::virtual_ports::{
+            VIRTUAL_INPUT_A_NAME, VIRTUAL_INPUT_B_NAME,
+            VIRTUAL_OUTPUT_A_NAME, VIRTUAL_OUTPUT_B_NAME
+        };
 
         // Simple JSON parsing (we control the format)
         let mut inputs = Vec::new();
@@ -75,7 +78,10 @@ pub mod macos {
                 // Extract device name between quotes
                 if let Some(end_quote) = trimmed[1..].find('"') {
                     let name = &trimmed[1..end_quote + 1];
-                    let is_virtual = name == VIRTUAL_INPUT_NAME || name == VIRTUAL_OUTPUT_NAME;
+                    let is_virtual = name == VIRTUAL_INPUT_A_NAME
+                        || name == VIRTUAL_INPUT_B_NAME
+                        || name == VIRTUAL_OUTPUT_A_NAME
+                        || name == VIRTUAL_OUTPUT_B_NAME;
                     let port = PortId::new(name.to_string(), is_virtual);
 
                     if in_inputs {
