@@ -2,11 +2,17 @@ use crate::app::{App, UiState};
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 
 pub fn render(f: &mut Frame, app: &App) {
+    // Show help overlay if requested
+    if app.show_help {
+        render_help(f);
+        return;
+    }
+
     let area = f.area();
 
     let mut lines = Vec::new();
@@ -109,4 +115,31 @@ fn format_input_line(
     }
 
     Line::from(spans)
+}
+
+/// Render the help screen
+fn render_help(f: &mut Frame) {
+    let area = f.area();
+
+    let help_text = vec![
+        Line::from("Navigation:"),
+        Line::from("  ↑/↓ or j/k       Move cursor up/down"),
+        Line::from(""),
+        Line::from("Managing Connections:"),
+        Line::from("  Space            Select input, then toggle output selection(s)"),
+        Line::from("  Enter            Commit selected connections"),
+        Line::from("  Esc              Cancel output selection"),
+        Line::from(""),
+        Line::from("Other Commands:"),
+        Line::from("  R                Manually refresh port list"),
+        Line::from("  ?                Toggle this help screen"),
+        Line::from("  q or ctrl+c      Quit application"),
+        Line::from(""),
+        Line::from("Virtual Ports:"),
+        Line::from("  mc-virtual-in    Virtual input (other apps send to this)"),
+        Line::from("  mc-virtual-out   Virtual output (other apps receive from this)"),
+    ];
+
+    let paragraph = Paragraph::new(help_text);
+    f.render_widget(paragraph, area);
 }

@@ -132,6 +132,9 @@ fn run_app<B: ratatui::backend::Backend>(
                     KeyCode::Esc => {
                         app.handle_escape();
                     }
+                    KeyCode::Char('?') => {
+                        app.toggle_help();
+                    }
                     _ => {}
                 }
             }

@@ -23,6 +23,7 @@ pub struct App {
     pub active_connections: Vec<(Connection, ConnectionStatus)>,
     pub ui_state: UiState,
     pub should_quit: bool,
+    pub show_help: bool,
 
     midi_manager: MidiManager,
     _event_tx: Sender<AppEvent>,
@@ -40,6 +41,7 @@ impl App {
             active_connections: Vec::new(),
             ui_state: UiState::Idle { cursor_idx: 0 },
             should_quit: false,
+            show_help: false,
             midi_manager,
             _event_tx: event_tx,
             event_rx,
@@ -280,5 +282,9 @@ impl App {
         // Stop port monitoring
         self.midi_manager.stop_port_monitoring();
         self.should_quit = true;
+    }
+
+    pub fn toggle_help(&mut self) {
+        self.show_help = !self.show_help;
     }
 }
