@@ -114,9 +114,6 @@ fn run_app<B: ratatui::backend::Backend>(
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         app.quit();
                     }
-                    KeyCode::Char('R') => {
-                        app.handle_refresh();
-                    }
                     KeyCode::Up | KeyCode::Char('k') => {
                         app.handle_key_up();
                     }

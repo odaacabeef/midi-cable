@@ -131,7 +131,6 @@ fn render_help(f: &mut Frame) {
         Line::from("  Esc              Cancel output selection"),
         Line::from(""),
         Line::from("Other Commands:"),
-        Line::from("  R                Manually refresh port list"),
         Line::from("  ?                Toggle this help screen"),
         Line::from("  q or ctrl+c      Quit application"),
         Line::from(""),

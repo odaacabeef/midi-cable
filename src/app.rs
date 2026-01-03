@@ -105,12 +105,6 @@ impl App {
         }
     }
 
-    fn handle_ports_changed(&mut self) {
-        // Refresh port lists
-        self.refresh_ports();
-        self.cleanup_stale_connections();
-    }
-
     fn cleanup_stale_connections(&mut self) {
         // Find connections that reference removed ports
         let stale_connections: Vec<Connection> = self
@@ -271,11 +265,6 @@ impl App {
         if matches!(&self.ui_state, UiState::SelectingOutputs { .. }) {
             self.ui_state = UiState::Idle { cursor_idx: 0 };
         }
-    }
-
-    pub fn handle_refresh(&mut self) {
-        // Manually refresh the port lists and clean up stale connections
-        self.handle_ports_changed();
     }
 
     pub fn quit(&mut self) {
