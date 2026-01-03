@@ -1,7 +1,16 @@
-.PHONY: build install
+.PHONY: build install clean test run
 
 build:
-	go build -o mc .
+	cargo build --release
 
-install: build
-	mv mc $$HOME/go/bin/
+install:
+	cargo install --path .
+
+clean:
+	cargo clean
+
+test:
+	cargo test
+
+run:
+	cargo run --release
