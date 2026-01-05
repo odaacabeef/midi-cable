@@ -70,73 +70,74 @@ flowchart LR
     style HotPlug fill:#e1ffe1
 ```
 
-## Connection Types
+## Forwarding Strategies
 
-### 1. Virtual Input → Virtual Output (In-Process)
+All MIDI message forwarding works the same way conceptually: receive from input, send to output. The architectural differences are about **how we handle CoreMIDI's process-level device caching**.
 
-For connections between virtual ports (e.g., mc-in-a → mc-out-a):
+### The Core Problem
+
+CoreMIDI caches device lists at the process level. Once a process starts, it never sees newly connected devices, even if you create fresh `MidiInput`/`MidiOutput` instances.
+
+### Strategy 1: In-Process Forwarding
+
+**When**: Output device was present at startup (or is a virtual port we created)
 
 ```mermaid
 sequenceDiagram
     participant Ext as External Device
     participant VIn as Virtual Input<br/>(mc-in-a)
     participant CB as Callback
-    participant List as input_outputs list
     participant VOut as Virtual Output<br/>(mc-out-a)
     participant App as External App
 
     Ext->>VIn: MIDI message
     VIn->>CB: callback(message)
-    CB->>List: iterate outputs
     CB->>VOut: send(message)
     VOut->>App: MIDI message
 
-    Note over CB,List: In-process forwarding<br/>Fast, but can't see<br/>hot-plugged devices
+    Note over CB,VOut: Fast: Direct in-process call<br/>But: Can't see hot-plugged devices
 ```
 
-**Characteristics**:
-- Fast (no IPC overhead)
-- In-process broadcast to multiple outputs
-- Cannot see hot-plugged devices
-- Used for virtual port pairs
+**Used for**: Virtual input → virtual output connections (e.g., mc-in-a → mc-out-a)
 
-### 2. Virtual Input → Hot-Plugged Device (Pipe Worker)
+**Trade-offs**:
+- ✅ Fast (no IPC overhead)
+- ✅ Simple architecture
+- ❌ Can't connect to hot-plugged devices
 
-For connections from virtual inputs to hot-plugged hardware (e.g., mc-in-a → HERMOD+):
+### Strategy 2: Subprocess Forwarding
+
+**When**: Output device may have been plugged in after startup
+
+Fresh subprocesses see the current device state, bypassing the cache problem.
+
+#### Variant A: Pipe Workers (for virtual inputs)
+
+Virtual input callbacks can't run in a subprocess (they're part of the main process), so we use stdin pipes for IPC:
 
 ```mermaid
 sequenceDiagram
     participant Ext as External Device
     participant VIn as Virtual Input<br/>(mc-in-a)
     participant CB as Callback
-    participant Pipe as pipe_workers list
     participant Stdin as Worker stdin
     participant Worker as Pipe Worker<br/>Subprocess
     participant Hot as HERMOD+<br/>(hot-plugged)
 
-    Note over Worker: Fresh process sees<br/>current devices
-
     Ext->>VIn: MIDI message
     VIn->>CB: callback(message)
-    CB->>Pipe: iterate pipe workers
     CB->>Stdin: write_all(message)
     Stdin->>Worker: MIDI data via pipe
     Worker->>Hot: send(message)
 
-    Note over CB,Stdin: Write to subprocess stdin
-    Note over Worker: Subprocess has fresh<br/>CoreMIDI context
+    Note over Worker: Fresh process sees<br/>hot-plugged devices
 ```
 
-**Characteristics**:
-- Subprocess sees hot-plugged devices
-- MIDI data sent via pipe (stdin)
-- Worker auto-exits when stdin closes
-- Slight IPC overhead
-- Used for hot-plug support
+**Used for**: Virtual input → hot-plugged device (e.g., mc-in-a → HERMOD+)
 
-### 3. Hardware → Hardware (Regular Worker)
+#### Variant B: Regular Workers (for hardware connections)
 
-For connections between hardware ports:
+For hardware-to-hardware connections, the entire forwarding loop runs in the subprocess:
 
 ```mermaid
 sequenceDiagram
@@ -157,11 +158,26 @@ sequenceDiagram
     Note over Worker: Runs until killed
 ```
 
-**Characteristics**:
-- Entire connection runs in subprocess
-- Both input and output visible to worker
-- Supports hot-plugged devices
-- Each connection is isolated process
+**Used for**: Hardware → hot-plugged device (e.g., USB MIDI → HERMOD+)
+
+**Trade-offs (both variants)**:
+- ✅ Can connect to hot-plugged devices
+- ✅ Reliable device enumeration
+- ⚠️ Slight latency increase (~0.5-1ms)
+- ⚠️ More complex architecture
+
+### Summary
+
+The choice of strategy is automatic based on what we're connecting:
+
+| Connection | Strategy | Reason |
+|------------|----------|--------|
+| Virtual → Virtual | In-process | Both ports created by main process |
+| Virtual → Hot-plug | Pipe worker | Need fresh enumeration for output |
+| Hardware → Virtual | Regular worker | Need fresh enumeration for input |
+| Hardware → Hot-plug | Regular worker | Need fresh enumeration for both |
+
+The key insight: **Use in-process when possible (faster), use subprocess when necessary (hot-plug support)**.
 
 ## Data Structures
 
