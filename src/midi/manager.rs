@@ -6,7 +6,6 @@ use crate::midi::virtual_ports::{
     VIRTUAL_OUTPUT_A_NAME, VIRTUAL_OUTPUT_B_NAME
 };
 use crossbeam::channel::Sender;
-use midir::MidiOutputConnection;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -15,7 +14,7 @@ use std::sync::{Arc, Mutex};
 pub struct MidiManager {
     pub virtual_ports: Option<VirtualPorts>,
     forwarders: HashMap<Connection, ForwarderHandle>,
-    virtual_input_outputs: HashMap<Connection, Arc<Mutex<MidiOutputConnection>>>,
+    virtual_input_outputs: HashMap<Connection, Arc<Mutex<midir::MidiOutputConnection>>>,
     event_tx: Sender<AppEvent>,
     monitoring_active: Arc<AtomicBool>,
 }
@@ -147,11 +146,10 @@ impl MidiManager {
             )) as Box<dyn std::error::Error>);
         }
 
-        // Check if input is one of the virtual inputs created by this app
+        // Virtual inputs use in-process broadcast (they're destinations, not sources)
         if (connection.input.name == VIRTUAL_INPUT_A_NAME || connection.input.name == VIRTUAL_INPUT_B_NAME)
             && connection.input.is_virtual
         {
-            // Use virtual port broadcast instead of regular forwarder
             if let Some(ref virtual_ports) = self.virtual_ports {
                 let output_handle = virtual_ports.add_virtual_input_output(
                     &connection.input.name,
@@ -161,14 +159,11 @@ impl MidiManager {
                 let _ = self.event_tx.send(AppEvent::ConnectionStatus);
                 return Ok(());
             } else {
-                return Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "Virtual ports not initialized"
-                )) as Box<dyn std::error::Error>);
+                return Err("Virtual ports not initialized".into());
             }
         }
 
-        // Regular connection - start the forwarder
+        // Regular connections use worker subprocesses (sees hot-plugged devices)
         let handle = start_forwarder(
             connection.clone(),
             &connection.input.name,
@@ -185,19 +180,17 @@ impl MidiManager {
 
     /// Stops a MIDI connection
     pub fn stop_connection(&mut self, connection: &Connection) {
-        // Check if it's a virtual input connection
+        // Check virtual inputs first
         if let Some(output_handle) = self.virtual_input_outputs.remove(connection) {
-            // Remove from virtual ports broadcast list
             if let Some(ref virtual_ports) = self.virtual_ports {
                 virtual_ports.remove_virtual_input_output(&connection.input.name, &output_handle);
             }
-            // The handle will be dropped, closing the MIDI connection
             return;
         }
 
-        // Regular forwarder connection
+        // Regular forwarder
         if let Some(_handle) = self.forwarders.remove(connection) {
-            // The forwarder will be dropped, closing the MIDI connections
+            // The forwarder handle will be dropped, killing the worker subprocess
         }
     }
 

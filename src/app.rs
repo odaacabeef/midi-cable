@@ -49,19 +49,48 @@ impl App {
     }
 
     pub fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::midi::virtual_ports::{
+            VIRTUAL_INPUT_A_NAME, VIRTUAL_OUTPUT_A_NAME,
+            VIRTUAL_INPUT_B_NAME, VIRTUAL_OUTPUT_B_NAME
+        };
+
         // Try to initialize virtual ports (optional, won't fail if not supported)
         let virtual_ports_created = self.midi_manager.init_virtual_ports().is_ok();
 
-        // Refresh port lists
+        // If virtual ports were created, wait for them to be visible to subprocesses
+        if virtual_ports_created {
+            use std::process::Command;
+
+            // Poll via subprocess until virtual ports appear (max 2 seconds)
+            // This ensures workers (also subprocesses) will see them
+            for _ in 0..20 {
+                if let Ok(exe_path) = std::env::current_exe() {
+                    if let Ok(output) = Command::new(exe_path)
+                        .arg("--list-ports")
+                        .output()
+                    {
+                        if output.status.success() {
+                            let devices_json = String::from_utf8_lossy(&output.stdout);
+                            let has_inputs = devices_json.contains(VIRTUAL_INPUT_A_NAME)
+                                && devices_json.contains(VIRTUAL_INPUT_B_NAME);
+                            let has_outputs = devices_json.contains(VIRTUAL_OUTPUT_A_NAME)
+                                && devices_json.contains(VIRTUAL_OUTPUT_B_NAME);
+
+                            if has_inputs && has_outputs {
+                                break;
+                            }
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+
+        // Refresh port lists for UI
         self.refresh_ports();
 
         // If virtual ports were created, establish the default connections
         if virtual_ports_created {
-            use crate::midi::virtual_ports::{
-                VIRTUAL_INPUT_A_NAME, VIRTUAL_OUTPUT_A_NAME,
-                VIRTUAL_INPUT_B_NAME, VIRTUAL_OUTPUT_B_NAME
-            };
-
             // Find pair A ports
             let virtual_input_a = self.midi_inputs.iter()
                 .find(|p| p.name == VIRTUAL_INPUT_A_NAME)
@@ -154,7 +183,19 @@ impl App {
     }
 
     pub fn start_connection(&mut self, connection: Connection) -> Result<(), Box<dyn std::error::Error>> {
-        self.midi_manager.start_connection(connection.clone())?;
+        // DEBUG
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/mc-app.log") {
+            let _ = writeln!(f, "start_connection called: {:?}", connection);
+        }
+
+        let result = self.midi_manager.start_connection(connection.clone());
+
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/mc-app.log") {
+            let _ = writeln!(f, "start_connection result: {:?}", result);
+        }
+
+        result?;
         self.update_connection_list();
         Ok(())
     }
