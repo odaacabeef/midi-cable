@@ -22,11 +22,11 @@ flowchart LR
 
     subgraph Main["Main Process"]
         direction TB
-        VirtInA[Virtual Input: mc-in-a]
-        VirtInB[Virtual Input: mc-in-b]
+        VirtInA[Virtual Destination: mc-dest-a]
+        VirtInB[Virtual Destination: mc-dest-b]
         Callback[Input Callback]
-        VirtOutA[Virtual Output: mc-out-a]
-        VirtOutB[Virtual Output: mc-out-b]
+        VirtOutA[Virtual Source: mc-source-a]
+        VirtOutB[Virtual Source: mc-source-b]
         Manager[MidiManager]
     end
 
@@ -68,6 +68,9 @@ flowchart LR
     style PipeWorker fill:#fff4e1
     style RegWorker fill:#fff4e1
     style HotPlug fill:#e1ffe1
+
+    classDef destNode fill:#e1f5ff
+    classDef sourceNode fill:#ffe1f5
 ```
 
 ## Forwarding Strategies
@@ -85,9 +88,9 @@ CoreMIDI caches device lists at the process level. Once a process starts, it nev
 ```mermaid
 sequenceDiagram
     participant Ext as External Device
-    participant VIn as Virtual Input<br/>(mc-in-a)
+    participant VIn as Virtual Destination<br/>(mc-dest-a)
     participant CB as Callback
-    participant VOut as Virtual Output<br/>(mc-out-a)
+    participant VOut as Virtual Source<br/>(mc-source-a)
     participant App as External App
 
     Ext->>VIn: MIDI message
@@ -98,7 +101,7 @@ sequenceDiagram
     Note over CB,VOut: Fast: Direct in-process call<br/>But: Can't see hot-plugged devices
 ```
 
-**Used for**: Virtual input → virtual output connections (e.g., mc-in-a → mc-out-a)
+**Used for**: Virtual destination → virtual source connections (e.g., mc-dest-a → mc-source-a)
 
 **Trade-offs**:
 - ✅ Fast (no IPC overhead)
@@ -118,7 +121,7 @@ Virtual input callbacks can't run in a subprocess (they're part of the main proc
 ```mermaid
 sequenceDiagram
     participant Ext as External Device
-    participant VIn as Virtual Input<br/>(mc-in-a)
+    participant VIn as Virtual Destination<br/>(mc-dest-a)
     participant CB as Callback
     participant Stdin as Worker stdin
     participant Worker as Pipe Worker<br/>Subprocess
@@ -133,7 +136,7 @@ sequenceDiagram
     Note over Worker: Fresh process sees<br/>hot-plugged devices
 ```
 
-**Used for**: Virtual input → hot-plugged device (e.g., mc-in-a → HERMOD+)
+**Used for**: Virtual destination → hot-plugged device (e.g., mc-dest-a → HERMOD+)
 
 #### Variant B: Regular Workers (for hardware connections)
 
@@ -213,25 +216,25 @@ pub struct MidiManager {
 
 ## Message Flow Examples
 
-### Example 1: External Device → mc-in-a → mc-out-b → Application
+### Example 1: External Device → mc-dest-a → mc-source-b → Application
 
 ```mermaid
 graph LR
-    A[Synth] -->|USB MIDI| B[mc-in-a]
-    B -->|in-process<br/>callback| C[mc-out-b]
+    A[Synth] -->|USB MIDI| B[mc-dest-a]
+    B -->|in-process<br/>callback| C[mc-source-b]
     C -->|USB MIDI| D[DAW]
 
     style B fill:#e1f5ff
     style C fill:#ffe1f5
 ```
 
-This works because mc-out-b is a virtual output, handled in-process.
+This works because mc-source-b is a virtual source, handled in-process.
 
-### Example 2: External Device → mc-in-a → HERMOD+ (hot-plugged)
+### Example 2: External Device → mc-dest-a → HERMOD+ (hot-plugged)
 
 ```mermaid
 graph LR
-    A[Synth] -->|USB MIDI| B[mc-in-a]
+    A[Synth] -->|USB MIDI| B[mc-dest-a]
     B -->|callback writes<br/>to stdin| C[Pipe Worker]
     C -->|subprocess has<br/>fresh MIDI context| D[HERMOD+]
 
@@ -338,6 +341,10 @@ Two independent pairs (A/B) provide:
 - Flexible routing (can create complex MIDI patches)
 - Clear separation of concerns
 
+Each pair consists of:
+- **Destination** (mc-dest-a/b): Where external apps send MIDI messages
+- **Source** (mc-source-a/b): Where external apps receive MIDI messages
+
 ## Startup Sequence
 
 ```mermaid
@@ -360,8 +367,8 @@ sequenceDiagram
 
     Main->>Mgr: Refresh port lists
     Main->>Mgr: Create default connections
-    Mgr->>Worker: mc-in-a → mc-out-a
-    Mgr->>Worker: mc-in-b → mc-out-b
+    Mgr->>Worker: mc-dest-a → mc-source-a
+    Mgr->>Worker: mc-dest-b → mc-source-b
 
     Note over Main: Ready for user interaction
 ```
@@ -451,8 +458,8 @@ Acceptable for most MIDI use cases (humans can't perceive <5ms latency).
 ### Manual Testing
 1. Start app, verify virtual ports created
 2. Plug in MIDI device while running
-3. Create connection from mc-in-a to hot-plugged device
-4. Send MIDI to mc-in-a, verify receipt on hot-plugged device
+3. Create connection from mc-dest-a to hot-plugged device
+4. Send MIDI to mc-dest-a, verify receipt on hot-plugged device
 5. Unplug device, verify connection cleanup
 
 ### Debugging

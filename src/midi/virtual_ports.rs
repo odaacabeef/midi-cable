@@ -4,10 +4,10 @@ use std::sync::{Arc, Mutex};
 use std::process::ChildStdin;
 use std::io::Write;
 
-pub const VIRTUAL_INPUT_A_NAME: &str = "mc-in-a";
-pub const VIRTUAL_OUTPUT_A_NAME: &str = "mc-out-a";
-pub const VIRTUAL_INPUT_B_NAME: &str = "mc-in-b";
-pub const VIRTUAL_OUTPUT_B_NAME: &str = "mc-out-b";
+pub const VIRTUAL_INPUT_A_NAME: &str = "mc-dest-a";
+pub const VIRTUAL_OUTPUT_A_NAME: &str = "mc-source-a";
+pub const VIRTUAL_INPUT_B_NAME: &str = "mc-dest-b";
+pub const VIRTUAL_OUTPUT_B_NAME: &str = "mc-source-b";
 
 /// Manages virtual MIDI ports with broadcast forwarding
 /// Creates two independent port pairs (A and B) for message isolation
