@@ -135,8 +135,8 @@ fn render_help(f: &mut Frame) {
         Line::from("  q or ctrl+c      Quit application"),
         Line::from(""),
         Line::from("Virtual Ports (two pairs for message isolation):"),
-        Line::from("  mc-in-a / mc-out-a     Pair A (e.g., voice messages)"),
-        Line::from("  mc-in-b / mc-out-b     Pair B (e.g., sync messages)"),
+        Line::from("  mc-dest-a / mc-source-a     Pair A (e.g., voice messages)"),
+        Line::from("  mc-dest-b / mc-source-b     Pair B (e.g., sync messages)"),
     ];
 
     let paragraph = Paragraph::new(help_text);
