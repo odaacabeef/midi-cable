@@ -1,24 +1,42 @@
 # MIDI Cable
 
-TUI application for managing MIDI message routing between devices.
-
-## Interface
-
-<img src="docs/screenshot.png" align="left" width="350" alt="The Synth UI">
-
-<br>
-
-This is what you see if you have no other MIDI devices connected. If you do they
-will also be listed and routable.
-
-`mc-in-a`/`mc-out-a` & `mc-in-b`/`mc-out-b` are two pairs of virtual ports this
-application creates. By default each in passes messages through to its
-corresponding out.
-
-Each in can be forwarded to many outs.
-
-<br clear="left"/>
+A Rust TUI for MIDI message routing.
 
 ## Usage
 
-"?" toggles help
+**Installation:** There's no binary distribution so you must compile it. Use
+`make build` or `make install`.
+
+```bash
+mc                 # Launch TUI
+mc --list-ports    # List available MIDI ports
+```
+
+## Interface
+
+![screenshot](docs/screenshot.png)
+
+## Virtual Ports
+
+MIDI Cable creates two pairs of virtual MIDI ports:
+
+- **mc-dest-a / mc-dest-b**: External apps send MIDI **to** these (destinations)
+- **mc-source-a / mc-source-b**: External apps receive MIDI **from** these (sources)
+
+Example: Route hardware synth through MIDI Cable to your DAW:
+```
+Hardware Synth → mc-dest-a → mc-source-b → DAW
+```
+
+## How It Works
+
+Most MIDI tools can't see devices plugged in after they start due to CoreMIDI's
+process-level caching. MIDI Cable spawns fresh subprocesses that bypass this
+limitation, enabling reliable hot-plug support.
+
+See [docs/architecture.md](docs/architecture.md) for technical details.
+
+## Platform Support
+
+macOS only (CoreMIDI). Linux/Windows support possible with ALSA/JACK or Windows
+MIDI APIs.
