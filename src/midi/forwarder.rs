@@ -1,116 +1,65 @@
 use crate::connection::Connection;
 use crate::events::AppEvent;
-use crate::midi::validation::{is_program_change, is_valid_midi_message, normalize_program_change};
 use crossbeam::channel::Sender;
-use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use std::process::{Child, Command};
 
-/// Handle for a running forwarder thread
+/// Handle for a running forwarder subprocess
 pub struct ForwarderHandle {
     _connection: Connection,
-    _join_handle: JoinHandle<()>,
-    _midi_connection: MidiInputConnection<()>,
+    child: Child,
 }
 
-/// Starts a MIDI forwarder thread that forwards messages from input to output
+impl Drop for ForwarderHandle {
+    fn drop(&mut self) {
+        // Kill the worker subprocess when handle is dropped
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Starts a MIDI forwarder subprocess that forwards messages from input to output
+/// The subprocess runs with fresh MIDI context that sees current device state
 pub fn start_forwarder(
     connection: Connection,
     input_port_name: &str,
     output_port_name: &str,
-    event_tx: Sender<AppEvent>,
+    _event_tx: Sender<AppEvent>,
 ) -> Result<ForwarderHandle, Box<dyn std::error::Error>> {
-    let midi_in = MidiInput::new("mc-forwarder")
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-    let midi_out = MidiOutput::new("mc-forwarder")
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+    // DEBUG: Log to file before attempting anything
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/mc-forwarder.log") {
+        let _ = writeln!(f, "start_forwarder called: {} -> {}", input_port_name, output_port_name);
+    }
 
-    // Find input port
-    let in_ports = midi_in.ports();
-    let in_port = in_ports
-        .iter()
-        .find(|p| midi_in.port_name(p).ok().as_deref() == Some(input_port_name))
-        .ok_or_else(|| Box::new(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("Input port '{}' not found", input_port_name)
-        )) as Box<dyn std::error::Error>)?;
+    // Get the path to our own executable
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed to get executable path: {}", e))?;
 
-    // Find output port
-    let out_ports = midi_out.ports();
-    let out_port = out_ports
-        .iter()
-        .find(|p| midi_out.port_name(p).ok().as_deref() == Some(output_port_name))
-        .ok_or_else(|| Box::new(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("Output port '{}' not found", output_port_name)
-        )) as Box<dyn std::error::Error>)?;
+    // Spawn a worker subprocess with stderr redirected to log file
+    // The worker runs in a fresh process that sees current CoreMIDI state
+    use std::fs::OpenOptions;
+    use std::process::Stdio;
 
-    // Open output connection
-    let out_conn = midi_out.connect(out_port, "mc-out")
-        .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to connect output: {:?}", e))) as Box<dyn std::error::Error>)?;
-    let out_conn_shared = Arc::new(Mutex::new(out_conn));
+    let log_file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/mc-worker.log")
+        .ok();
 
-    // Clone for the callback
-    let out_conn_clone = Arc::clone(&out_conn_shared);
-    let event_tx_clone = event_tx.clone();
-    let conn_clone = connection.clone();
+    let mut cmd = Command::new(exe_path);
+    cmd.arg("worker")
+        .arg(input_port_name)
+        .arg(output_port_name);
 
-    // Open input connection with callback
-    let in_conn = midi_in.connect(
-        in_port,
-        "mc-in",
-        move |_timestamp, message, _| {
-            handle_midi_message(message, &out_conn_clone, &event_tx_clone, &conn_clone);
-        },
-        (),
-    ).map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to connect input: {:?}", e))) as Box<dyn std::error::Error>)?;
+    if let Some(log) = log_file {
+        cmd.stderr(Stdio::from(log));
+    }
 
-    // Successfully started forwarding
-
-    // The join handle is just a placeholder - actual work happens in the MIDI callback
-    // The thread just waits for the connection to be dropped
-    let join_handle = thread::spawn(|| {
-        // This thread doesn't do much - the real work is in the MIDI callback
-        // We just need to keep the connections alive
-        thread::park();
-    });
+    let child = cmd.spawn()
+        .map_err(|e| format!("Failed to spawn worker: {}", e))?;
 
     Ok(ForwarderHandle {
         _connection: connection,
-        _join_handle: join_handle,
-        _midi_connection: in_conn,
+        child,
     })
-}
-
-/// Handles a single MIDI message - validates and forwards it
-fn handle_midi_message(
-    message: &[u8],
-    output: &Arc<Mutex<MidiOutputConnection>>,
-    _event_tx: &Sender<AppEvent>,
-    connection: &Connection,
-) {
-    if message.is_empty() {
-        return;
-    }
-
-    // Special handling for Program Change messages (from Go's fwd.go lines 83-89)
-    if is_program_change(message) {
-        let normalized = normalize_program_change(message);
-        if let Ok(mut out) = output.lock() {
-            if let Err(e) = out.send(&normalized) {
-                eprintln!("Error forwarding program change on {}: {}", connection, e);
-            }
-        }
-        return;
-    }
-
-    // Validate other messages
-    if is_valid_midi_message(message) {
-        if let Ok(mut out) = output.lock() {
-            if let Err(e) = out.send(message) {
-                eprintln!("Error forwarding message on {}: {}", connection, e);
-            }
-        }
-    }
-    // Invalid messages are silently skipped
 }
