@@ -3,6 +3,7 @@ use midir::{MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 use std::sync::{Arc, Mutex};
 use std::process::ChildStdin;
 use std::io::Write;
+use std::collections::HashMap;
 
 pub const VIRTUAL_INPUT_A_NAME: &str = "mc-dest-a";
 pub const VIRTUAL_OUTPUT_A_NAME: &str = "mc-source-a";
@@ -17,12 +18,16 @@ pub struct VirtualPorts {
     _output_connection_a: Arc<Mutex<MidiOutputConnection>>,
     input_outputs_a: Arc<Mutex<Vec<Arc<Mutex<MidiOutputConnection>>>>>,
     pipe_workers_a: Arc<Mutex<Vec<Arc<Mutex<ChildStdin>>>>>,
+    // Maps dummy connections to their corresponding stdin handles
+    pipe_worker_map_a: Arc<Mutex<HashMap<usize, Arc<Mutex<ChildStdin>>>>>,
 
     // Port pair B
     _input_connection_b: MidiInputConnection<()>,
     _output_connection_b: Arc<Mutex<MidiOutputConnection>>,
     input_outputs_b: Arc<Mutex<Vec<Arc<Mutex<MidiOutputConnection>>>>>,
     pipe_workers_b: Arc<Mutex<Vec<Arc<Mutex<ChildStdin>>>>>,
+    // Maps dummy connections to their corresponding stdin handles
+    pipe_worker_map_b: Arc<Mutex<HashMap<usize, Arc<Mutex<ChildStdin>>>>>,
 }
 
 impl VirtualPorts {
@@ -128,10 +133,12 @@ impl VirtualPorts {
             _output_connection_a: output_shared_a,
             input_outputs_a,
             pipe_workers_a,
+            pipe_worker_map_a: Arc::new(Mutex::new(HashMap::new())),
             _input_connection_b: input_connection_b,
             _output_connection_b: output_shared_b,
             input_outputs_b,
             pipe_workers_b,
+            pipe_worker_map_b: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -171,11 +178,11 @@ impl VirtualPorts {
         // Regular output port - spawn pipe worker subprocess (supports hot-plug)
         use std::process::{Command, Stdio};
 
-        // Determine which pipe worker list to use
-        let pipe_workers = if input_name == VIRTUAL_INPUT_A_NAME {
-            &self.pipe_workers_a
+        // Determine which pipe worker list and map to use
+        let (pipe_workers, pipe_worker_map) = if input_name == VIRTUAL_INPUT_A_NAME {
+            (&self.pipe_workers_a, &self.pipe_worker_map_a)
         } else {
-            &self.pipe_workers_b
+            (&self.pipe_workers_b, &self.pipe_worker_map_b)
         };
 
         // Get executable path
@@ -234,7 +241,15 @@ impl VirtualPorts {
         if let Some(port) = dummy_port {
             let dummy_conn = dummy_out.connect(port, "mc-dummy")
                 .map_err(|e| anyhow::anyhow!("Failed to create dummy connection: {:?}", e))?;
-            return Ok(Arc::new(Mutex::new(dummy_conn)));
+            let dummy_conn_shared = Arc::new(Mutex::new(dummy_conn));
+
+            // Store mapping from dummy connection to stdin handle for cleanup
+            let key = Arc::as_ptr(&dummy_conn_shared) as usize;
+            if let Ok(mut map) = pipe_worker_map.lock() {
+                map.insert(key, Arc::clone(&stdin_shared));
+            }
+
+            return Ok(dummy_conn_shared);
         }
 
         Err(anyhow::anyhow!("No MIDI output ports available for dummy connection"))
@@ -242,16 +257,29 @@ impl VirtualPorts {
 
     /// Remove an output connection from virtual input broadcast list
     pub fn remove_virtual_input_output(&self, input_name: &str, output: &Arc<Mutex<MidiOutputConnection>>) {
-        let input_outputs = if input_name == VIRTUAL_INPUT_A_NAME {
-            &self.input_outputs_a
+        let (input_outputs, pipe_workers, pipe_worker_map) = if input_name == VIRTUAL_INPUT_A_NAME {
+            (&self.input_outputs_a, &self.pipe_workers_a, &self.pipe_worker_map_a)
         } else if input_name == VIRTUAL_INPUT_B_NAME {
-            &self.input_outputs_b
+            (&self.input_outputs_b, &self.pipe_workers_b, &self.pipe_worker_map_b)
         } else {
             return;
         };
 
+        // Remove from in-process outputs list
         if let Ok(mut outputs) = input_outputs.lock() {
             outputs.retain(|out| !Arc::ptr_eq(out, output));
+        }
+
+        // Check if this is a pipe worker (has mapping)
+        let key = Arc::as_ptr(output) as usize;
+        if let Ok(mut map) = pipe_worker_map.lock() {
+            if let Some(stdin_handle) = map.remove(&key) {
+                // Remove the stdin handle from pipe workers list
+                if let Ok(mut workers) = pipe_workers.lock() {
+                    workers.retain(|worker| !Arc::ptr_eq(worker, &stdin_handle));
+                }
+                // stdin_handle is dropped here, closing the pipe and causing worker to exit
+            }
         }
     }
 
