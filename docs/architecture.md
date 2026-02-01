@@ -351,22 +351,11 @@ Acceptable for most MIDI use cases (humans can't perceive <5ms latency).
 
 ## Testing Strategy
 
-### Manual Testing
 1. Start app, verify virtual ports created
 2. Plug in MIDI device while running
-3. Create connection from mc-dest-a to hot-plugged device
-4. Send MIDI to mc-dest-a, verify receipt on hot-plugged device
+3. Create connection to hot-plugged device
+4. Send MIDI messages, verify forwarding
 5. Unplug device, verify connection cleanup
-
-### Debugging
-Minimal logging for connection troubleshooting:
-- `/tmp/mc-app.log` - connection start/stop events
-- `/tmp/mc-forwarder.log` - regular worker spawn events
-- `/tmp/mc-worker.log` - regular worker stderr (errors only)
-- `/tmp/mc-pipe-worker.log` - pipe worker stderr (errors only)
-- `/tmp/mc-reverse-pipe-worker.log` - reverse pipe worker stderr (errors only)
-
-Logs capture connection attempts and errors but avoid verbose runtime output to keep performance high.
 
 ## Future Improvements
 

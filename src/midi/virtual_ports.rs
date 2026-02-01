@@ -189,24 +189,13 @@ impl VirtualPorts {
         let exe_path = std::env::current_exe()
             .map_err(|e| anyhow::anyhow!("Failed to get executable path: {}", e))?;
 
-        // Spawn pipe worker subprocess with stderr redirected to log
-        use std::fs::OpenOptions;
-        let log_file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/mc-pipe-worker.log")
-            .ok();
-
-        let mut cmd = Command::new(exe_path);
-        cmd.arg("pipe-worker")
+        // Spawn pipe worker subprocess
+        let mut child = Command::new(exe_path)
+            .arg("pipe-worker")
             .arg(output_name)
-            .stdin(Stdio::piped());
-
-        if let Some(log) = log_file {
-            cmd.stderr(Stdio::from(log));
-        }
-
-        let mut child = cmd.spawn()
+            .stdin(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
             .map_err(|e| anyhow::anyhow!("Failed to spawn pipe worker: {}", e))?;
 
         // Take stdin handle for writing MIDI data
@@ -300,26 +289,15 @@ impl VirtualPorts {
         let exe_path = std::env::current_exe()
             .map_err(|e| anyhow::anyhow!("Failed to get executable path: {}", e))?;
 
-        // Spawn reverse pipe worker subprocess with stderr redirected to log
-        use std::fs::OpenOptions;
+        // Spawn reverse pipe worker subprocess
         use std::process::{Command, Stdio};
 
-        let log_file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/tmp/mc-reverse-pipe-worker.log")
-            .ok();
-
-        let mut cmd = Command::new(exe_path);
-        cmd.arg("reverse-pipe-worker")
+        let mut child = Command::new(exe_path)
+            .arg("reverse-pipe-worker")
             .arg(input_name)
-            .stdout(Stdio::piped());
-
-        if let Some(log) = log_file {
-            cmd.stderr(Stdio::from(log));
-        }
-
-        let mut child = cmd.spawn()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
             .map_err(|e| anyhow::anyhow!("Failed to spawn reverse pipe worker: {}", e))?;
 
         // Take stdout handle for reading MIDI data from worker

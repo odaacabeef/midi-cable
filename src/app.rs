@@ -183,19 +183,7 @@ impl App {
     }
 
     pub fn start_connection(&mut self, connection: Connection) -> Result<(), Box<dyn std::error::Error>> {
-        // DEBUG
-        use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/mc-app.log") {
-            let _ = writeln!(f, "start_connection called: {:?}", connection);
-        }
-
-        let result = self.midi_manager.start_connection(connection.clone());
-
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/mc-app.log") {
-            let _ = writeln!(f, "start_connection result: {:?}", result);
-        }
-
-        result?;
+        self.midi_manager.start_connection(connection.clone())?;
         self.update_connection_list();
         Ok(())
     }
