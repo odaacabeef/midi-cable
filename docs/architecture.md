@@ -12,173 +12,37 @@ CoreMIDI (macOS) and similar MIDI APIs maintain process-level device caches that
 
 ## Architecture Components
 
-```mermaid
-%%{init: {'theme':'base', 'themeVariables': { 'clusterBkg':'#ffffff', 'clusterBorder':'#cccccc'}}}%%
-flowchart LR
-    subgraph External["External Devices"]
-        ExtDevice[External MIDI Device]
-        Hardware[Hardware MIDI Port]
-    end
+**Main Process**:
+- Virtual destinations (mc-dest-a/b) - receive MIDI from external apps
+- Virtual sources (mc-source-a/b) - send MIDI to external apps
+- MidiManager - spawns workers, manages connections
 
-    subgraph Main["Main Process"]
-        direction TB
-        VirtInA[Virtual Destination: mc-dest-a]
-        VirtInB[Virtual Destination: mc-dest-b]
-        Callback[Input Callback]
-        VirtOutA[Virtual Source: mc-source-a]
-        VirtOutB[Virtual Source: mc-source-b]
-        Manager[MidiManager]
-    end
+**Worker Subprocesses**:
+- Pipe worker - reads from stdin, forwards to hardware
+- Reverse pipe worker - reads from hardware, writes to stdout
+- Regular worker - reads from hardware, forwards to hardware
 
-    subgraph Workers["Worker Subprocesses"]
-        direction TB
-        PipeWorker[Pipe Worker<br/>reads from stdin]
-        RegWorker[Regular Worker<br/>hardware→hardware]
-    end
+**Key insight**: Subprocesses see hot-plugged devices (fresh CoreMIDI enumeration), while main process handles virtual ports (created by main process)
 
-    subgraph Output["Hot-Plugged Devices"]
-        HotPlug[HERMOD+]
-    end
+## Connection Types
 
-    ExtDevice -->|MIDI| VirtInA
-    ExtDevice -.->|MIDI| VirtInB
-    Hardware -->|via worker| RegWorker
+All MIDI forwarding follows the pattern: receive from input, send to output. The architectural differences are about **how we handle CoreMIDI's process-level device caching** to support hot-plugged devices.
 
-    VirtInA --> Callback
-    VirtInB --> Callback
+**Key constraint**: A long-running process never sees devices plugged in after it starts, even creating new `MidiInput`/`MidiOutput` instances.
 
-    Callback -->|in-process| VirtOutA
-    Callback -.in-process.-> VirtOutB
-    Callback -->|via stdin pipe| PipeWorker
-
-    Manager -.manages.-> VirtInA
-    Manager -.spawns.-> PipeWorker
-    Manager -.spawns.-> RegWorker
-
-    PipeWorker -->|forwards| HotPlug
-    RegWorker -->|forwards| HotPlug
-
-    VirtOutA -->|MIDI| ExtDevice
-    VirtOutB -.MIDI.-> ExtDevice
-
-    style VirtInA fill:#e1f5ff
-    style VirtInB fill:#e1f5ff
-    style VirtOutA fill:#ffe1f5
-    style VirtOutB fill:#ffe1f5
-    style PipeWorker fill:#fff4e1
-    style RegWorker fill:#fff4e1
-    style HotPlug fill:#e1ffe1
-
-    classDef destNode fill:#e1f5ff
-    classDef sourceNode fill:#ffe1f5
-```
-
-## Forwarding Strategies
-
-All MIDI message forwarding works the same way conceptually: receive from input, send to output. The architectural differences are about **how we handle CoreMIDI's process-level device caching**.
-
-### The Core Problem
-
-CoreMIDI caches device lists at the process level. Once a process starts, it never sees newly connected devices, even if you create fresh `MidiInput`/`MidiOutput` instances.
-
-### Strategy 1: In-Process Forwarding
-
-**When**: Output device was present at startup (or is a virtual port we created)
-
-```mermaid
-sequenceDiagram
-    participant Ext as External Device
-    participant VIn as Virtual Destination<br/>(mc-dest-a)
-    participant CB as Callback
-    participant VOut as Virtual Source<br/>(mc-source-a)
-    participant App as External App
-
-    Ext->>VIn: MIDI message
-    VIn->>CB: callback(message)
-    CB->>VOut: send(message)
-    VOut->>App: MIDI message
-
-    Note over CB,VOut: Fast: Direct in-process call<br/>But: Can't see hot-plugged devices
-```
-
-**Used for**: Virtual destination → virtual source connections (e.g., mc-dest-a → mc-source-a)
-
-**Trade-offs**:
-- ✅ Fast (no IPC overhead)
-- ✅ Simple architecture
-- ❌ Can't connect to hot-plugged devices
-
-### Strategy 2: Subprocess Forwarding
-
-**When**: Output device may have been plugged in after startup
-
-Fresh subprocesses see the current device state, bypassing the cache problem.
-
-#### Variant A: Pipe Workers (for virtual inputs)
-
-Virtual input callbacks can't run in a subprocess (they're part of the main process), so we use stdin pipes for IPC:
-
-```mermaid
-sequenceDiagram
-    participant Ext as External Device
-    participant VIn as Virtual Destination<br/>(mc-dest-a)
-    participant CB as Callback
-    participant Stdin as Worker stdin
-    participant Worker as Pipe Worker<br/>Subprocess
-    participant Hot as HERMOD+<br/>(hot-plugged)
-
-    Ext->>VIn: MIDI message
-    VIn->>CB: callback(message)
-    CB->>Stdin: write_all(message)
-    Stdin->>Worker: MIDI data via pipe
-    Worker->>Hot: send(message)
-
-    Note over Worker: Fresh process sees<br/>hot-plugged devices
-```
-
-**Used for**: Virtual destination → hot-plugged device (e.g., mc-dest-a → HERMOD+)
-
-#### Variant B: Regular Workers (for hardware connections)
-
-For hardware-to-hardware connections, the entire forwarding loop runs in the subprocess:
-
-```mermaid
-sequenceDiagram
-    participant HW1 as Hardware Input
-    participant Main as Main Process
-    participant Worker as Worker Subprocess
-    participant HW2 as Hardware Output<br/>(may be hot-plugged)
-
-    Main->>Worker: spawn worker
-    Note over Worker: Fresh CoreMIDI context
-
-    Worker->>HW1: connect input
-    Worker->>HW2: connect output
-
-    HW1->>Worker: MIDI message
-    Worker->>HW2: forward message
-
-    Note over Worker: Runs until killed
-```
-
-**Used for**: Hardware → hot-plugged device (e.g., USB MIDI → HERMOD+)
-
-**Trade-offs (both variants)**:
-- ✅ Can connect to hot-plugged devices
-- ✅ Reliable device enumeration
-- ⚠️ Slight latency increase (~0.5-1ms)
-- ⚠️ More complex architecture
-
-### Summary
-
-The choice of strategy is automatic based on what we're connecting:
+**Strategy**: The architecture automatically selects the appropriate connection method:
 
 | Connection | Strategy | Reason |
 |------------|----------|--------|
-| Virtual → Virtual | In-process | Both ports created by main process |
-| Virtual → Hot-plug | Pipe worker | Need fresh enumeration for output |
-| Hardware → Virtual | Regular worker | Need fresh enumeration for input |
-| Hardware → Hot-plug | Regular worker | Need fresh enumeration for both |
+| Virtual Dest → Virtual Source | In-process | Both ports created by main process |
+| Virtual Dest → Hardware | Pipe worker | Need fresh enumeration for output |
+| Hardware → Virtual Source | Reverse pipe worker | Need fresh enumeration for input + virtual source write access |
+| Hardware → Hardware | Regular worker | Need fresh enumeration for both |
+
+Notes:
+- Virtual **destinations** (mc-dest-a/b) are inputs - other apps send to them
+- Virtual **sources** (mc-source-a/b) are outputs - other apps receive from them
+- You cannot forward TO a virtual destination (they're inputs, not outputs)
 
 The key insight: **Use in-process when possible (faster), use subprocess when necessary (hot-plug support)**.
 
@@ -209,93 +73,49 @@ pub struct MidiManager {
     pub virtual_ports: Option<VirtualPorts>,
     forwarders: HashMap<Connection, ForwarderHandle>,           // Regular workers
     virtual_input_outputs: HashMap<Connection, Arc<...>>,       // Virtual input connections
+    hardware_to_virtual: HashMap<Connection, Child>,            // Reverse pipe workers
     event_tx: Sender<AppEvent>,
     monitoring_active: Arc<AtomicBool>,
 }
 ```
 
-## Message Flow Examples
+## Connection Lifecycle
 
-### Example 1: External Device → mc-dest-a → mc-source-b → Application
-
-```mermaid
-graph LR
-    A[Synth] -->|USB MIDI| B[mc-dest-a]
-    B -->|in-process<br/>callback| C[mc-source-b]
-    C -->|USB MIDI| D[DAW]
-
-    style B fill:#e1f5ff
-    style C fill:#ffe1f5
-```
-
-This works because mc-source-b is a virtual source, handled in-process.
-
-### Example 2: External Device → mc-dest-a → HERMOD+ (hot-plugged)
-
-```mermaid
-graph LR
-    A[Synth] -->|USB MIDI| B[mc-dest-a]
-    B -->|callback writes<br/>to stdin| C[Pipe Worker]
-    C -->|subprocess has<br/>fresh MIDI context| D[HERMOD+]
-
-    style B fill:#e1f5ff
-    style C fill:#fff4e1
-    style D fill:#e1ffe1
-```
-
-This requires a pipe worker because:
-1. HERMOD+ was plugged in after main process started
-2. Main process can't see it (stale CoreMIDI cache)
-3. Pipe worker subprocess has fresh CoreMIDI context
-4. Pipe worker can enumerate and connect to HERMOD+
-
-### Example 3: Hardware → HERMOD+ (hot-plugged)
-
-```mermaid
-graph LR
-    A[USB MIDI Device] -->|worker subprocess<br/>reads input| B[Regular Worker]
-    B -->|worker can see<br/>hot-plugged device| C[HERMOD+]
-
-    style B fill:#fff4e1
-    style C fill:#e1ffe1
-```
-
-Regular worker subprocess has fresh CoreMIDI context and can see both input and output.
-
-## Process Lifecycle
-
-### Pipe Worker
+### 1. In-Process (Virtual Dest → Virtual Source)
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Spawned: add_virtual_input_output()
-    Spawned --> Running: connect to output port
-    Running --> Reading: blocked on stdin.read()
-    Reading --> Forwarding: received MIDI data
-    Forwarding --> Reading: message sent
-    Reading --> Exiting: stdin closed (EOF)
-    Exiting --> [*]: worker exits
+    [*] --> Created: add_virtual_input_output()
+    Created --> Listening: callback registered
+    Listening --> Forwarding: MIDI received on virtual dest
+    Forwarding --> Listening: sent to virtual source
+    Listening --> Removed: connection removed
+    Removed --> [*]
 
-    note right of Spawned
-        Fresh process with
-        current device list
+    note right of Created
+        Fast: no subprocess overhead
+        Both ports in main process
     end note
 
-    note right of Exiting
-        Auto-cleanup when
-        connection removed
+    note right of Removed
+        Output handle dropped
+        from broadcast list
     end note
 ```
 
-### Regular Worker
+**Example**: mc-dest-a → mc-source-b
+
+**Trade-offs**: ✅ Fast (~0.1ms) | ✅ Simple | ❌ No hot-plug support
+
+### 2. Regular Worker (Hardware → Hardware)
 
 ```mermaid
 stateDiagram-v2
     [*] --> Spawned: start_forwarder()
     Spawned --> Connected: connect input & output
     Connected --> Listening: callback registered
-    Listening --> Forwarding: MIDI received
-    Forwarding --> Listening: message sent
+    Listening --> Forwarding: MIDI received from hardware
+    Forwarding --> Listening: sent to hardware
     Listening --> Killed: connection removed
     Killed --> [*]: worker terminated
 
@@ -303,47 +123,123 @@ stateDiagram-v2
         Fresh process sees
         all current devices
     end note
+
+    note left of Listening
+        Entire connection
+        runs in subprocess
+    end note
+
+    note right of Killed
+        Subprocess killed
+        by main process
+    end note
 ```
 
-## Key Design Decisions
+**Example**: MIDI keyboard → Hot-plugged synthesizer
 
-### Why Subprocess Architecture?
+**Data flow**: Hardware input → worker subprocess → hardware output (entirely in subprocess)
 
-**Problem**: CoreMIDI process-level caching prevents detection of hot-plugged devices.
+**Trade-offs**: ✅ Hot-plug support | ✅ Isolated | ⚠️ Slight latency (~0.5-1ms)
+
+### 3. Pipe Worker (Virtual Dest → Hardware)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Spawned: add_virtual_input_output()
+    Spawned --> Connected: connect to output port
+    Connected --> Reading: blocked on stdin.read()
+    Reading --> Forwarding: received data from main
+    Forwarding --> Reading: sent to hardware
+    Reading --> Exiting: stdin closed (EOF)
+    Exiting --> [*]: worker exits
+
+    note right of Spawned
+        Fresh process sees
+        hot-plugged devices
+    end note
+
+    note left of Reading
+        Main process callback
+        writes to stdin pipe
+    end note
+
+    note right of Exiting
+        Auto-cleanup when
+        stdin closed
+    end note
+```
+
+**Example**: mc-dest-a → Hot-plugged synthesizer
+
+**Data flow**: Virtual dest callback → stdin pipe → worker subprocess → hardware output
+
+**Trade-offs**: ✅ Hot-plug support | ⚠️ Slight latency (~0.5-1ms) | ⚠️ Process overhead
+
+### 4. Reverse Pipe Worker (Hardware → Virtual Source)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Spawned: add_hardware_to_virtual_source()
+    Spawned --> Connected: connect to input port
+    Connected --> Reading: callback registered
+    Reading --> Forwarding: MIDI received from hardware
+    Forwarding --> Writing: write to stdout
+    Writing --> Reading: main process sends to virtual source
+    Reading --> Killed: connection removed
+    Killed --> [*]: worker terminated
+
+    note right of Spawned
+        Fresh process sees
+        hot-plugged devices
+    end note
+
+    note left of Writing
+        Main process reads
+        stdout and writes
+        to virtual source
+    end note
+
+    note right of Killed
+        Subprocess killed
+        by main process
+    end note
+```
+
+**Example**: Hot-plugged Nome Clock → mc-source-b
+
+**Data flow**: Hardware input → worker subprocess → stdout pipe → main process → virtual source
+
+**Trade-offs**: ✅ Hot-plug support | ✅ Virtual source write access | ⚠️ Slight latency (~0.5-1ms)
+
+## Design Rationale
+
+### Why Subprocesses?
+
+**Problem**: CoreMIDI caches device lists at process startup and never refreshes.
 
 **Solutions Considered**:
-1. ❌ Poll for device changes in main process → doesn't work, cache never refreshes
-2. ❌ Use CoreMIDI notifications → notifications fire but enumeration still returns stale list
-3. ✅ Subprocess enumeration → fresh process sees current state
+1. ❌ Poll for device changes in main process → cache never refreshes
+2. ❌ Use CoreMIDI notifications → notifications fire but enumeration still stale
+3. ✅ **Subprocess enumeration** → fresh process sees current state
 
-**Trade-offs**:
-- ✅ Reliable hot-plug detection
-- ✅ Each subprocess is isolated
-- ⚠️ Slight performance overhead (process spawning, IPC)
-- ⚠️ More complex architecture
+### Why Different Worker Types?
 
-### Why Two Worker Types?
+Each connection type uses the minimal architecture needed:
 
-**Pipe Workers** (for virtual input connections):
-- Virtual inputs use callbacks (can't run in subprocess)
-- Need IPC mechanism → stdin pipe is simplest
-- Automatic cleanup when stdin closes
-
-**Regular Workers** (for hardware connections):
-- Entire connection runs in subprocess
-- No IPC needed
-- Simpler architecture for this use case
+- **In-process**: No hot-plug needed, keep it simple
+- **Pipe worker**: Virtual dest callback must run in main, pipe data to subprocess
+- **Regular worker**: Both endpoints can be in subprocess, no pipes needed
+- **Reverse pipe worker**: Hardware input needs subprocess, virtual source needs main
 
 ### Why Virtual Port Pairs?
 
 Two independent pairs (A/B) provide:
 - Message isolation (pair A traffic doesn't affect pair B)
-- Flexible routing (can create complex MIDI patches)
-- Clear separation of concerns
+- Flexible routing (create complex MIDI patches)
 
-Each pair consists of:
-- **Destination** (mc-dest-a/b): Where external apps send MIDI messages
-- **Source** (mc-source-a/b): Where external apps receive MIDI messages
+Each pair:
+- **Destination** (mc-dest-a/b): Other apps send TO these (inputs to our app)
+- **Source** (mc-source-a/b): Other apps receive FROM these (outputs from our app)
 
 ## Startup Sequence
 
@@ -463,10 +359,14 @@ Acceptable for most MIDI use cases (humans can't perceive <5ms latency).
 5. Unplug device, verify connection cleanup
 
 ### Debugging
-- Worker stderr → `/tmp/mc-worker.log`
-- Pipe worker stderr → `/tmp/mc-pipe-worker.log`
-- Main process → `/tmp/mc-app.log`
-- Check logs for spawn failures, send errors, enumeration issues
+Minimal logging for connection troubleshooting:
+- `/tmp/mc-app.log` - connection start/stop events
+- `/tmp/mc-forwarder.log` - regular worker spawn events
+- `/tmp/mc-worker.log` - regular worker stderr (errors only)
+- `/tmp/mc-pipe-worker.log` - pipe worker stderr (errors only)
+- `/tmp/mc-reverse-pipe-worker.log` - reverse pipe worker stderr (errors only)
+
+Logs capture connection attempts and errors but avoid verbose runtime output to keep performance high.
 
 ## Future Improvements
 

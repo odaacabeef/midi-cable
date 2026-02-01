@@ -34,6 +34,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 return run_pipe_worker(&args[2]);
             }
+            "reverse-pipe-worker" => {
+                if args.len() < 3 {
+                    eprintln!("Usage: {} reverse-pipe-worker <input-port>", args[0]);
+                    return Err("Missing arguments for reverse-pipe-worker mode".into());
+                }
+                return run_reverse_pipe_worker(&args[2]);
+            }
             _ => {}
         }
     }
@@ -81,8 +88,6 @@ fn run_pipe_worker(output_port_name: &str) -> Result<(), Box<dyn std::error::Err
     use midir::MidiOutput;
     use std::io::{self, Read};
 
-    eprintln!("Pipe worker starting for output: {}", output_port_name);
-
     // Create MIDI output
     let midi_out = MidiOutput::new("mc-pipe-worker")?;
 
@@ -96,8 +101,6 @@ fn run_pipe_worker(output_port_name: &str) -> Result<(), Box<dyn std::error::Err
     // Connect to output
     let mut out_conn = midi_out.connect(out_port, "mc-pipe-worker-out")?;
 
-    eprintln!("Pipe worker connected to: {}", output_port_name);
-
     // Read MIDI messages from stdin and forward to output
     let stdin = io::stdin();
     let mut stdin_lock = stdin.lock();
@@ -107,23 +110,78 @@ fn run_pipe_worker(output_port_name: &str) -> Result<(), Box<dyn std::error::Err
         match stdin_lock.read(&mut buffer) {
             Ok(0) => {
                 // EOF - parent closed pipe
-                eprintln!("Pipe worker: stdin closed, exiting");
                 break;
             }
             Ok(n) => {
                 // Forward MIDI message
-                if let Err(e) = out_conn.send(&buffer[..n]) {
-                    eprintln!("Pipe worker error forwarding: {}", e);
-                }
+                let _ = out_conn.send(&buffer[..n]);
             }
-            Err(e) => {
-                eprintln!("Pipe worker error reading stdin: {}", e);
+            Err(_) => {
                 break;
             }
         }
     }
 
     Ok(())
+}
+
+/// Reverse pipe worker mode: read MIDI messages from input port and write to stdout
+/// Used for hardware → virtual source connections - subprocess sees hot-plugged devices,
+/// main process reads from stdout and forwards to virtual source
+fn run_reverse_pipe_worker(input_port_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use midir::MidiInput;
+    use midi::validation::{is_program_change, is_valid_midi_message, normalize_program_change};
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+
+    // Create MIDI input (fresh process sees hot-plugged devices)
+    let midi_in = MidiInput::new("mc-reverse-pipe-worker")?;
+
+    // Find input port
+    let in_ports = midi_in.ports();
+    let in_port = in_ports
+        .iter()
+        .find(|p| midi_in.port_name(p).ok().as_deref() == Some(input_port_name))
+        .ok_or_else(|| format!("Input port '{}' not found", input_port_name))?;
+
+    // Get stdout handle for writing MIDI data to parent process
+    let stdout = Arc::new(Mutex::new(io::stdout()));
+    let stdout_clone = Arc::clone(&stdout);
+
+    // Connect to input with callback that writes to stdout
+    let _in_conn = midi_in.connect(
+        in_port,
+        "mc-reverse-pipe-worker-in",
+        move |_timestamp, message, _| {
+            if message.is_empty() {
+                return;
+            }
+
+            // Handle Program Change messages
+            if is_program_change(message) {
+                let normalized = normalize_program_change(message);
+                if let Ok(mut out) = stdout_clone.lock() {
+                    let _ = out.write_all(&normalized);
+                    let _ = out.flush();
+                }
+                return;
+            }
+
+            // Validate and forward other messages
+            if is_valid_midi_message(message) {
+                if let Ok(mut out) = stdout_clone.lock() {
+                    let _ = out.write_all(message);
+                    let _ = out.flush();
+                }
+            }
+        },
+        (),
+    )?;
+
+    // Keep the worker alive until killed
+    loop {
+        std::thread::sleep(Duration::from_secs(1));
+    }
 }
 
 /// Worker mode: create a MIDI connection and forward messages until killed
@@ -136,20 +194,6 @@ fn run_worker(input_port_name: &str, output_port_name: &str) -> Result<(), Box<d
     // Create MIDI input and output (worker runs after ports verified to exist)
     let midi_in = MidiInput::new("mc-worker")?;
     let midi_out = MidiOutput::new("mc-worker")?;
-
-    // DEBUG: Log what ports the worker actually sees
-    eprintln!("Worker input ports:");
-    for port in midi_in.ports() {
-        if let Ok(name) = midi_in.port_name(&port) {
-            eprintln!("  - {}", name);
-        }
-    }
-    eprintln!("Worker output ports:");
-    for port in midi_out.ports() {
-        if let Ok(name) = midi_out.port_name(&port) {
-            eprintln!("  - {}", name);
-        }
-    }
 
     // Find input port
     let in_ports = midi_in.ports();
@@ -183,9 +227,7 @@ fn run_worker(input_port_name: &str, output_port_name: &str) -> Result<(), Box<d
             if is_program_change(message) {
                 let normalized = normalize_program_change(message);
                 if let Ok(mut out) = out_conn_clone.lock() {
-                    if let Err(e) = out.send(&normalized) {
-                        eprintln!("Error forwarding program change: {}", e);
-                    }
+                    let _ = out.send(&normalized);
                 }
                 return;
             }
@@ -193,16 +235,12 @@ fn run_worker(input_port_name: &str, output_port_name: &str) -> Result<(), Box<d
             // Validate and forward other messages
             if is_valid_midi_message(message) {
                 if let Ok(mut out) = out_conn_clone.lock() {
-                    if let Err(e) = out.send(message) {
-                        eprintln!("Error forwarding message: {}", e);
-                    }
+                    let _ = out.send(message);
                 }
             }
         },
         (),
     )?;
-
-    eprintln!("Worker started: {} -> {}", input_port_name, output_port_name);
 
     // Keep the worker alive until killed
     loop {

@@ -283,6 +283,77 @@ impl VirtualPorts {
         }
     }
 
+    /// Add a hardware input → virtual source connection using a reverse pipe worker
+    /// Subprocess reads from hardware (sees hot-plugged devices) and pipes to main process,
+    /// which forwards to virtual source (can only be written to by the process that created it)
+    pub fn add_hardware_to_virtual_source(&self, input_name: &str, output_name: &str) -> Result<std::process::Child> {
+        // Determine which virtual source to use
+        let output_conn = if output_name == VIRTUAL_OUTPUT_A_NAME {
+            Arc::clone(&self._output_connection_a)
+        } else if output_name == VIRTUAL_OUTPUT_B_NAME {
+            Arc::clone(&self._output_connection_b)
+        } else {
+            return Err(anyhow::anyhow!("Output must be a virtual source (mc-source-a or mc-source-b), got: {}", output_name));
+        };
+
+        // Get executable path
+        let exe_path = std::env::current_exe()
+            .map_err(|e| anyhow::anyhow!("Failed to get executable path: {}", e))?;
+
+        // Spawn reverse pipe worker subprocess with stderr redirected to log
+        use std::fs::OpenOptions;
+        use std::process::{Command, Stdio};
+
+        let log_file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/mc-reverse-pipe-worker.log")
+            .ok();
+
+        let mut cmd = Command::new(exe_path);
+        cmd.arg("reverse-pipe-worker")
+            .arg(input_name)
+            .stdout(Stdio::piped());
+
+        if let Some(log) = log_file {
+            cmd.stderr(Stdio::from(log));
+        }
+
+        let mut child = cmd.spawn()
+            .map_err(|e| anyhow::anyhow!("Failed to spawn reverse pipe worker: {}", e))?;
+
+        // Take stdout handle for reading MIDI data from worker
+        let stdout = child.stdout.take()
+            .ok_or_else(|| anyhow::anyhow!("Failed to get reverse pipe worker stdout"))?;
+
+        // Spawn a thread to read from stdout and forward to virtual source
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buffer = [0u8; 1024];
+            let mut reader = stdout;
+
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => {
+                        // EOF - worker exited
+                        break;
+                    }
+                    Ok(n) => {
+                        // Forward MIDI message to virtual source
+                        if let Ok(mut out) = output_conn.lock() {
+                            let _ = out.send(&buffer[..n]);
+                        }
+                    }
+                    Err(_) => {
+                        break;
+                    }
+                }
+            }
+        });
+
+        Ok(child)
+    }
+
     #[cfg(not(unix))]
     pub fn create() -> Result<Self> {
         Err(anyhow::anyhow!(

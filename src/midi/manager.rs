@@ -7,6 +7,7 @@ use crate::midi::virtual_ports::{
 };
 use crossbeam::channel::Sender;
 use std::collections::HashMap;
+use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -15,6 +16,7 @@ pub struct MidiManager {
     pub virtual_ports: Option<VirtualPorts>,
     forwarders: HashMap<Connection, ForwarderHandle>,
     virtual_input_outputs: HashMap<Connection, Arc<Mutex<midir::MidiOutputConnection>>>,
+    hardware_to_virtual: HashMap<Connection, Child>,
     event_tx: Sender<AppEvent>,
     monitoring_active: Arc<AtomicBool>,
 }
@@ -26,6 +28,7 @@ impl MidiManager {
             virtual_ports: None,
             forwarders: HashMap::new(),
             virtual_input_outputs: HashMap::new(),
+            hardware_to_virtual: HashMap::new(),
             event_tx,
             monitoring_active: Arc::new(AtomicBool::new(false)),
         }
@@ -139,7 +142,9 @@ impl MidiManager {
         connection: Connection,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Check if connection already exists
-        if self.forwarders.contains_key(&connection) || self.virtual_input_outputs.contains_key(&connection) {
+        if self.forwarders.contains_key(&connection)
+            || self.virtual_input_outputs.contains_key(&connection)
+            || self.hardware_to_virtual.contains_key(&connection) {
             return Err(Box::new(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 "Connection already exists"
@@ -156,6 +161,25 @@ impl MidiManager {
                     &connection.output.name
                 )?;
                 self.virtual_input_outputs.insert(connection.clone(), output_handle);
+                let _ = self.event_tx.send(AppEvent::ConnectionStatus);
+                return Ok(());
+            } else {
+                return Err("Virtual ports not initialized".into());
+            }
+        }
+
+        // Hardware → virtual source connections use reverse pipe worker
+        // (subprocess sees hot-plugged devices, main process writes to virtual source)
+        if !connection.input.is_virtual
+            && (connection.output.name == VIRTUAL_OUTPUT_A_NAME || connection.output.name == VIRTUAL_OUTPUT_B_NAME)
+            && connection.output.is_virtual
+        {
+            if let Some(ref virtual_ports) = self.virtual_ports {
+                let child = virtual_ports.add_hardware_to_virtual_source(
+                    &connection.input.name,
+                    &connection.output.name
+                )?;
+                self.hardware_to_virtual.insert(connection.clone(), child);
                 let _ = self.event_tx.send(AppEvent::ConnectionStatus);
                 return Ok(());
             } else {
@@ -188,6 +212,14 @@ impl MidiManager {
             return;
         }
 
+        // Check hardware → virtual source connections
+        if let Some(mut child) = self.hardware_to_virtual.remove(connection) {
+            // Kill the reverse pipe worker subprocess
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+
         // Regular forwarder
         if let Some(_handle) = self.forwarders.remove(connection) {
             // The forwarder handle will be dropped, killing the worker subprocess
@@ -203,6 +235,11 @@ impl MidiManager {
 
         // Add virtual input connections
         for conn in self.virtual_input_outputs.keys() {
+            statuses.insert(conn.clone(), ConnectionStatus::Active);
+        }
+
+        // Add hardware → virtual source connections
+        for conn in self.hardware_to_virtual.keys() {
             statuses.insert(conn.clone(), ConnectionStatus::Active);
         }
 
